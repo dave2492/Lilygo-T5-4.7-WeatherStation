@@ -29,6 +29,17 @@ enum alignment {LEFT, RIGHT, CENTER};
 #define barchart_on   true
 #define barchart_off  false
 
+// Skip NTP sync X times returning from deep sleep (currently 9 hours)
+// Note we always sync after an overnight wakeup or hard reset
+#define SYNC_EVERY_X_WAKES 18
+
+// RTC Memory Variables (preserved during deep sleep)
+// Init to max value to trigger NTP after a hard reset
+// Braces mean only init from hard reset
+RTC_DATA_ATTR int bootCount = { SYNC_EVERY_X_WAKES };
+int wakeupCause;
+
+// Normal Global Variables
 boolean LargeIcon   = true;
 boolean SmallIcon   = false;
 #define Large  20           // For icon drawing
@@ -36,6 +47,7 @@ boolean SmallIcon   = false;
 String  Time_str = "--:--:--";
 String  Date_str = "-- --- ----";
 int     wifi_signal, CurrentHour = 0, CurrentMin = 0, CurrentSec = 0, EventCnt = 0, vref = 1100;
+
 //################ PROGRAM VARIABLES and OBJECTS ##########################################
 #define max_readings 24 // Limited to 3-days here, but could go to 5-days = 40 as the data is issued  
 
@@ -48,17 +60,18 @@ float humidity_readings[max_readings]    = {0};
 float rain_readings[max_readings]        = {0};
 float snow_readings[max_readings]        = {0};
 
-long SleepDuration   = 20; // Sleep time in minutes, aligned to the nearest minute boundary, so if 30 will always update at 00 or 30 past the hour
+long SleepDuration   = 30; // Sleep time in minutes, aligned to the nearest minute boundary, so if 30 will always update at 00 or 30 past the hour
 int  WakeupHour      = 6;  // Wakeup after 06:00 to save battery power
 int  SleepHour       = 23; // Sleep  after 23:00 to save battery power
 long StartTime       = 0;
 long SleepTimer      = 0;
 long Delta           = 30; // ESP32 rtc speed compensation, prevents display at xx:59:yy and then xx:00:yy (one minute later) to save power
 
-//fonts
+// included fonts and graphic objects
 #include "OpenSans8B.h"
 #include "OpenSans10B.h"
 #include "OpenSans12B.h"
+#include "OpenSans14B.h"
 #include "OpenSans18B.h"
 #include "OpenSans24B.h"
 #include "moon.h"
@@ -68,48 +81,165 @@ long Delta           = 30; // ESP32 rtc speed compensation, prevents display at 
 GFXfont  currentFont;
 uint8_t *framebuffer;
 
+// Forward declarations
+// Required because plain .cpp files (unlike .ino sketches) are compiled top-to-bottom
+// with no auto-generated prototypes, so functions must be declared before first use.
+void UpdateTimers();
+void BeginSleep();
+uint8_t StartWiFi();
+void StopWiFi();
+void InitialiseSystem();
+void CheckTimeSync();
+void TriggerTimeSync();
+void Convert_Readings_to_Imperial();
+bool DecodeWeather(WiFiClient& json, String Type);
+String ConvertUnixTime(int unix_time);
+bool obtainWeatherData(WiFiClient & client, const String & RequestType);
+float mm_to_inches(float value_mm);
+float hPa_to_inHg(float value_hPa);
+int JulianDate(int d, int m, int y);
+float SumOfPrecip(float DataArray[], int readings);
+String TitleCase(String text);
+void DisplayWeather();
+void DisplayGeneralInfoSection();
+void DisplayWeatherIcon(int x, int y);
+void DisplayMainWeatherSection(int x, int y);
+void DisplayDisplayWindSection(int x, int y, float angle, float windspeed, int Cradius);
+String WindDegToOrdinalDirection(float winddirection);
+void DisplayTempHumiPressSection(int x, int y);
+void DisplayForecastTextSection(int x, int y);
+void DisplayVisiCCoverSection(int x, int y);
+void DisplayForecastWeather(int x, int y, int index, int fwidth);
+double NormalizedMoonPhase(int d, int m, int y);
+void DisplayAstronomySection(int x, int y);
+void DrawMoon(int x, int y, int diameter, int dd, int mm, int yy, String hemisphere);
+String MoonPhase(int d, int m, int y, String hemisphere);
+void DisplayForecastSection(int x, int y);
+void DisplayGraphSection(int x, int y);
+void DisplayConditionsSection(int x, int y, String IconName, bool IconSize);
+void arrow(int x, int y, int asize, float aangle, int pwidth, int plength);
+void DrawSegment(int x, int y, int o1, int o2, int o3, int o4, int o11, int o12, int o13, int o14);
+void DrawPressureAndTrend(int x, int y, float pressure, String slope);
+void DisplayStatusSection(int x, int y, int rssi);
+void DrawRSSI(int x, int y, int rssi);
+boolean UpdateLocalTime();
+void DrawBattery(int x, int y);
+void addcloud(int x, int y, int scale, int linesize);
+void addrain(int x, int y, int scale, bool IconSize);
+void addsnow(int x, int y, int scale, bool IconSize);
+void addtstorm(int x, int y, int scale);
+void addsun(int x, int y, int scale, bool IconSize);
+void addfog(int x, int y, int scale, int linesize, bool IconSize);
+void DrawAngledLine(int x, int y, int x1, int y1, int size, int color);
+void ClearSky(int x, int y, bool IconSize, String IconName);
+void BrokenClouds(int x, int y, bool IconSize, String IconName);
+void FewClouds(int x, int y, bool IconSize, String IconName);
+void ScatteredClouds(int x, int y, bool IconSize, String IconName);
+void Rain(int x, int y, bool IconSize, String IconName);
+void ChanceRain(int x, int y, bool IconSize, String IconName);
+void Thunderstorms(int x, int y, bool IconSize, String IconName);
+void Snow(int x, int y, bool IconSize, String IconName);
+void Mist(int x, int y, bool IconSize, String IconName);
+void CloudCover(int x, int y, int CloudCover);
+void addmoon(int x, int y, bool IconSize);
+void Nodata(int x, int y, bool IconSize, String IconName);
+void Visibility(int x, int y, String Visibility);
+void DrawMoonImage(int x, int y);
+void DrawSunriseImage(int x, int y);
+void DrawSunsetImage(int x, int y);
+void DrawGraph(int x_pos, int y_pos, int gwidth, int gheight, float Y1Min, float Y1Max, String title, float DataArray[], int readings, boolean auto_scale, boolean barchart_mode);
+void drawString(int32_t x, int32_t y, String text, alignment align);
+void fillCircle(int x, int y, int r, uint8_t color);
+void drawFastHLine(int16_t x0, int16_t y0, int length, uint16_t color);
+void drawFastVLine(int16_t x0, int16_t y0, int length, uint16_t color);
+void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
+void drawCircle(int x0, int y0, int r, uint8_t color);
+void drawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+void fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                  int16_t x2, int16_t y2, uint16_t color);
+void drawPixel(int x, int y, uint8_t color);
+void setFont(GFXfont const & font);
+void epd_update();
+
+// routines
+
+void UpdateTimers() {
+  bool AwakeNow;
+  int HourDuration;
+  // Set the timer values for deep sleep
+  // Does a SleepDuration sleep when awake
+  // Does a single sleep for overnight
+  // Am I in a waking hour right now?
+  if (WakeupHour > SleepHour)
+    AwakeNow = (CurrentHour >= WakeupHour || CurrentHour <= SleepHour);
+  else
+    AwakeNow = (CurrentHour >= WakeupHour && CurrentHour <= SleepHour);
+
+  if (AwakeNow) {
+    // just sleep for the sleep duration (minutes)
+    SleepTimer = (SleepDuration * 60 - ((CurrentMin % SleepDuration) * 60 + CurrentSec)) + Delta;
+    if (SleepTimer < 300) SleepTimer += (SleepDuration * 60);  // bump if just a little too early
+  } else {
+    // Sleep thru the night
+    TriggerTimeSync();  // do a time sync when we wake
+    if (WakeupHour > SleepHour)  // sleep doesn't span midnight
+      HourDuration = WakeupHour - CurrentHour;
+    else // sleep spans midnight
+      if (CurrentHour >= SleepHour)
+        HourDuration = WakeupHour + (24 - CurrentHour);
+      else
+        HourDuration = WakeupHour - CurrentHour;
+    SleepTimer = (HourDuration * 3600 - ((CurrentMin) * 60 + CurrentSec)) + Delta;
+  }
+}
+
 void BeginSleep() {
+  StopWiFi();         // ensure it is indeed OFF
   epd_poweroff_all();
   UpdateLocalTime();
-  SleepTimer = (SleepDuration * 60 - ((CurrentMin % SleepDuration) * 60 + CurrentSec)) + Delta; //Some ESP32 have a RTC that is too fast to maintain accurate time, so add an offset
+  UpdateTimers();
   esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
-  Serial.println("Awake for : " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
+  Serial.println("This was wakeup number: " + String(bootCount) + "Reason: " + String(wakeupCause));
+  Serial.println("Awake for: " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
   Serial.println("Entering " + String(SleepTimer) + " (secs) of sleep time");
-  Serial.println("Starting deep-sleep period...");
+  Serial.end(); // stop input, wait for output buffers, then stop the service
+  delay(3000);
   esp_deep_sleep_start();  // Sleep for e.g. 30 minutes
 }
 
-boolean SetupTime() {
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer, "time.nist.gov"); //(gmtOffset_sec, daylightOffset_sec, ntpServer)
-  setenv("TZ", Timezone, 1);  //setenv()adds the "TZ" variable to the environment with a value TimeZone, only used if set to 1, 0 means no change
-  tzset(); // Set the TZ environment variable
-  delay(100);
-  return UpdateLocalTime();
-}
+uint8_t StartWiFi() {
+  // Start it up...
+  int result =0;
+  char errorChar = '0';
 
-uint8_t StartWiFi() 
-{
   Serial.println("\r\nWiFi Connecting to: " + String(ssid));
-  IPAddress dns(8, 8, 8, 8); // Use Google DNS
+  IPAddress dns(8, 8, 8, 8); // Use Google DNS, Does this really do anything?
+  
   WiFi.disconnect();
   WiFi.mode(WIFI_STA); // switch off AP
   WiFi.begin(ssid, password);
-  if (WiFi.waitForConnectResult() != WL_CONNECTED) 
+  
+  result = WiFi.waitForConnectResult(); // will wait for connect or failure or timeout
+  if (result != WL_CONNECTED)
   {
-    Serial.printf("WiFi connection failed, retrying...!\n");
+    if (result < 255) {errorChar += result;} else {errorChar='X';};
+    Serial.println("WiFi connection failed with error code: " + String(errorChar) + ", retrying...!");
     WiFi.disconnect(true); // delete SID/PWD
     delay(500);
     WiFi.begin(ssid, password);
+    result = WiFi.waitForConnectResult(); // will wait for connect or failure or timeout
   }
-  if (WiFi.waitForConnectResult() == WL_CONNECTED) 
+  if (result == WL_CONNECTED)
   {
     wifi_signal = WiFi.RSSI(); // Get Wifi Signal strength now, because the WiFi will be turned off to save power!
     Serial.println("WiFi connected at: " + WiFi.localIP().toString());
   }
   else 
   {
+    if (result < 255) {errorChar += result;} else {errorChar='X';};
     wifi_signal = 0;
-    Serial.println("WiFi connection *** FAILED ***");
+    Serial.println("WiFi connection *** FAILED *** with error code: " + String(errorChar));
   }
   return WiFi.status();
 }
@@ -122,54 +252,85 @@ void StopWiFi() {
 
 void InitialiseSystem() {
   StartTime = millis();
+  wakeupCause = esp_sleep_get_wakeup_cause();
   Serial.begin(115200);
-  while (!Serial);
+  delay(1000);
+  // comment this out since the S3 kills the USB when sleeping
+  //while (!Serial);
   Serial.println(String(__FILE__) + "\nStarting...");
+  // Incr and display bootCount
+  bootCount++;
+  Serial.printf("Wakeup Number: %d\n", bootCount);
+  Serial.printf("Wakeup Cause: %d\n", wakeupCause);
   epd_init();
   framebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), EPD_WIDTH * EPD_HEIGHT / 2);
   if (!framebuffer) Serial.println("Memory alloc failed!");
   memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
 }
 
+void CheckTimeSync() {
+  // Check if it's time to sync NTP
+  if (bootCount >= SYNC_EVERY_X_WAKES) {
+    bootCount = 0;
+    Serial.println("Threshold reached. Syncing NTP...");
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer, "time.nist.gov"); //(gmtOffset_sec, daylightOffset_sec, ntpServer)
+  } else {
+    Serial.println("Skipping NTP sync to save power.");
+  }
+  // set the timezone and complete the time setup
+  setenv("TZ", Timezone, 1);  //setenv()adds the "TZ" variable to the environment with a value TimeZone, only used if set to 1, 0 means no change
+  tzset(); // Set the TZ environment variable
+  delay(100);
+  UpdateLocalTime();
+}
+
+void TriggerTimeSync() {
+  // Trigger a sync on the next wake or reset
+  bootCount = SYNC_EVERY_X_WAKES;
+}
+
+// The mandatory functions loop, setup, ...
 void loop() {
   // Nothing to do here
 }
 
 void setup() {
   InitialiseSystem();
-  if (StartWiFi() == WL_CONNECTED && SetupTime() == true) {
-    bool WakeUp = false;
-    if (WakeupHour > SleepHour)
-      WakeUp = (CurrentHour >= WakeupHour || CurrentHour <= SleepHour);
-    else
-      WakeUp = (CurrentHour >= WakeupHour && CurrentHour <= SleepHour);
-    if (WakeUp) {
-      byte Attempts = 1;
-      bool RxWeather  = false;
-      bool RxForecast = false;
-      WiFiClient client;   // wifi client object
-      while ((RxWeather == false || RxForecast == false) && Attempts <= 2) { // Try up-to 2 time for Weather and Forecast data
-        if (RxWeather  == false) RxWeather  = obtainWeatherData(client, "weather");
-        if (RxForecast == false) RxForecast = obtainWeatherData(client, "forecast");
-        Attempts++;
-      }
-      Serial.println("Received all weather data...");
-      if (RxWeather && RxForecast) { // Only if received both Weather or Forecast proceed
-        StopWiFi();         // Reduces power consumption
-        epd_poweron();      // Switch on EPD display
-        epd_clear();        // Clear the screen
-        DisplayWeather();   // Display the weather data
-        epd_update();       // Update the display to show the information
-        epd_poweroff_all(); // Switch off all power to EPD
-      }
-    }
-  }
-  else {
+  // Connect to Internet
+  if (StartWiFi() == false) {
+    // Failed - Not much to do then...
+    StopWiFi();         // Reduces power consumption
+    epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
     DisplayStatusSection(600, 20, wifi_signal);    // Wi-Fi signal strength and Battery voltage
     epd_update();       // Update the display to show the information
-    epd_poweroff_all(); // Switch off all power to EPD
-  }
+  } else {
+    // Connected! Continue...
+    CheckTimeSync();    // Run an NTP sync if necessary
+    // Get weather data
+    byte Attempts = 1;
+    bool RxWeather  = false;
+    bool RxForecast = false;
+    WiFiClient client;   // wifi client object
+    while ((RxWeather == false || RxForecast == false) && Attempts <= 2) { // Try up-to 2 time for Weather and Forecast data
+      if (RxWeather  == false) RxWeather  = obtainWeatherData(client, "weather");
+      if (RxForecast == false) RxForecast = obtainWeatherData(client, "forecast");
+      Attempts++;
+    }
+    // Display weather data
+    if (RxWeather && RxForecast) { // Only if received both Weather or Forecast proceed
+      Serial.println("Received all weather data...");
+      StopWiFi();         // Reduces power consumption
+      epd_poweron();      // Switch on EPD display
+      epd_clear();        // Clear the screen
+      DisplayWeather();   // Display the weather data
+      epd_update();       // Update the display to show the information
+    } else {
+      // Data incomplete - print error msg
+      Serial.println("FAILDED to Receive weather data, skipping display...");
+    }
+  }  // End of wifi connected
+  // Nothing left to do
   BeginSleep();
 }
 
@@ -181,7 +342,7 @@ void Convert_Readings_to_Imperial() { // Only the first 3-hours are used
 
 bool DecodeWeather(WiFiClient& json, String Type) {
   Serial.print(F("\nDeserializing json... "));
-  auto doc = DynamicJsonDocument(64 * 1024);                     // allocate the JsonDocument
+  JsonDocument doc;                                              // allocate the JsonDocument
   DeserializationError error = deserializeJson(doc, json); // Deserialize the JSON document
   if (error) {                                             // Test if parsing succeeds.
     Serial.print(F("deserializeJson() failed: "));
@@ -309,7 +470,7 @@ int JulianDate(int d, int m, int y) {
 
 float SumOfPrecip(float DataArray[], int readings) {
   float sum = 0;
-  for (int i = 0; i <= readings; i++) sum += DataArray[i];
+  for (int i = 0; i < readings; i++) sum += DataArray[i];
   return sum;
 }
 
@@ -326,7 +487,7 @@ void DisplayWeather() {                          // 4.7" e-paper display is 960x
   DisplayStatusSection(600, 20, wifi_signal);    // Wi-Fi signal strength and Battery voltage
   DisplayGeneralInfoSection();                   // Top line of the display
   DisplayDisplayWindSection(137, 150, WxConditions[0].Winddir, WxConditions[0].Windspeed, 100);
-  DisplayAstronomySection(5, 252);               // Astronomy section Sun rise/set, Moon phase and Moon icon
+  DisplayAstronomySection(10, 252);               // Astronomy section Sun rise/set, Moon phase and Moon icon
   DisplayMainWeatherSection(320, 110);           // Centre section of display for Location, temperature, Weather report, current Wx Symbol
   DisplayWeatherIcon(835, 140);                  // Display weather icon scale = Large;
   DisplayForecastSection(285, 220);              // 3hr forecast boxes
@@ -335,9 +496,9 @@ void DisplayWeather() {                          // 4.7" e-paper display is 960x
 
 void DisplayGeneralInfoSection() {
   setFont(OpenSans10B);
-  drawString(5, 2, City, LEFT);
-  setFont(OpenSans8B);
-  drawString(500, 2, Date_str + "  @   " + Time_str, LEFT);
+  drawString(15, 2, City, LEFT);
+//  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str, CENTER);
+  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + "  ct  " + String(bootCount) + " rsn " + String(wakeupCause), CENTER);
 }
 
 void DisplayWeatherIcon(int x, int y) {
@@ -346,8 +507,8 @@ void DisplayWeatherIcon(int x, int y) {
 
 void DisplayMainWeatherSection(int x, int y) {
   setFont(OpenSans8B);
-  DisplayTempHumiPressSection(x, y - 60);
-  DisplayForecastTextSection(x - 55, y + 45);
+  DisplayTempHumiPressSection(x, y - 65);
+  DisplayForecastTextSection(x - 55, y + 50);
   DisplayVisiCCoverSection(x - 10, y + 95);
 }
 
@@ -382,9 +543,9 @@ void DisplayDisplayWindSection(int x, int y, float angle, float windspeed, int C
   setFont(OpenSans12B);
   drawString(x, y - 50, WindDegToOrdinalDirection(angle), CENTER);
   setFont(OpenSans24B);
-  drawString(x + 3, y - 18, String(windspeed, 1), CENTER);
+  drawString(x + 3, y - 20, String(windspeed, 1), CENTER);
   setFont(OpenSans12B);
-  drawString(x, y + 25, (Units == "M" ? "m/s" : "mph"), CENTER);
+  drawString(x, y + 15, (Units == "M" ? "m/s" : "mph"), CENTER);
 }
 
 String WindDegToOrdinalDirection(float winddirection) {
@@ -409,13 +570,13 @@ String WindDegToOrdinalDirection(float winddirection) {
 
 void DisplayTempHumiPressSection(int x, int y) {
   setFont(OpenSans24B);
-  drawString(x - 30, y, String(WxConditions[0].Temperature, 1) + "°   " + String(WxConditions[0].Humidity, 0) + "%", LEFT);
-  setFont(OpenSans12B);
-  DrawPressureAndTrend(x + 215, y + 15, WxConditions[0].Pressure, WxConditions[0].Trend);
-  int Yoffset = 42;
+  drawString(x - 30, y, String(WxConditions[0].Temperature, 1) + "°  " + String(WxConditions[0].Humidity, 0) + "%", LEFT);
+  setFont(OpenSans14B);
+  //DrawPressureAndTrend(x + 215, y + 15, WxConditions[0].Pressure, WxConditions[0].Trend);
+  int Yoffset = 50;
   if (WxConditions[0].Windspeed > 0) {
     drawString(x - 30, y + Yoffset, String(WxConditions[0].FeelsLike, 1) + "° "+TXT_FEELSLIKE, LEFT);   // Show FeelsLike temperature if windspeed > 0
-    Yoffset += 30;
+    Yoffset += 25;
   }
   drawString(x - 30, y + Yoffset, String(WxConditions[0].High, 0) + "° | " + String(WxConditions[0].Low, 0) + "° " + TXT_HILO, LEFT); // Show forecast high and Low
 }
@@ -438,15 +599,16 @@ void DisplayForecastTextSection(int x, int y) {
   if (WxForecast[0].Rainfall > 0) Wx_Description += " (" + String(WxForecast[0].Rainfall, 1) + String((Units == "M" ? "mm" : "in")) + ")";
   String Line1 = Wx_Description.substring(0, Wx_Description.indexOf("~"));
   String Line2 = Wx_Description.substring(Wx_Description.indexOf("~") + 1);
-  drawString(x + 30, y + 5, TitleCase(Line1), LEFT);
+  drawString(x + 25, y + 5, TitleCase(Line1), LEFT);
   if (Line1 != Line2) drawString(x + 30, y + 30, Line2, LEFT);
 }
 
 void DisplayVisiCCoverSection(int x, int y) {
   setFont(OpenSans12B);
   Serial.print("=========================="); Serial.println(WxConditions[0].Visibility);
-  Visibility(x + 5, y, String(WxConditions[0].Visibility) + "M");
-  CloudCover(x + 155, y, WxConditions[0].Cloudcover);
+  DrawPressureAndTrend(x - 15, y + 9, WxConditions[0].Pressure, WxConditions[0].Trend);
+  Visibility(x + 115, y, String(WxConditions[0].Visibility) + "M");
+  CloudCover(x + 265, y, WxConditions[0].Cloudcover);
 }
 
 void DisplayForecastWeather(int x, int y, int index, int fwidth) {
@@ -570,7 +732,7 @@ void DisplayGraphSection(int x, int y) {
   // 2. Humidity
   DrawGraph(gx + 1 * gap, gy, gwidth, gheight, 0, 100,   TXT_HUMIDITY_PERCENT, humidity_readings, max_readings, autoscale_off, barchart_off);
   
-  // 3. Rain
+  // 3. Rain or Snow
   if (SumOfPrecip(rain_readings, max_readings) >= SumOfPrecip(snow_readings, max_readings))
     DrawGraph(gx + 2 * gap + 5, gy, gwidth, gheight, 0, 30, Units == "M" ? TXT_RAINFALL_MM : TXT_RAINFALL_IN, rain_readings, max_readings, autoscale_on, barchart_on);
   else
@@ -632,9 +794,9 @@ void DrawPressureAndTrend(int x, int y, float pressure, String slope) {
 }
 
 void DisplayStatusSection(int x, int y, int rssi) {
-  setFont(OpenSans8B);
-  DrawRSSI(x + 305, y + 15, rssi);
-  DrawBattery(x + 150, y);
+  setFont(OpenSans10B);
+  DrawRSSI(x + 310, y + 10, rssi);
+  DrawBattery(x + 110, y);
 }
 
 void DrawRSSI(int x, int y, int rssi) {
@@ -660,7 +822,7 @@ void DrawRSSI(int x, int y, int rssi) {
 boolean UpdateLocalTime() {
   struct tm timeinfo;
   char   time_output[30], day_output[30], update_time[30];
-  while (!getLocalTime(&timeinfo, 5000)) { // Wait for 5-sec for time to synchronise
+  while (!getLocalTime(&timeinfo, 10000)) { // Wait up to 10-sec for time to synchronise
     Serial.println("Failed to obtain time");
     return false;
   }
@@ -686,26 +848,64 @@ boolean UpdateLocalTime() {
 }
 
 void DrawBattery(int x, int y) {
-  uint8_t percentage = 100;
-  esp_adc_cal_characteristics_t adc_chars;
-  esp_adc_cal_value_t val_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars);
-  if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
-    Serial.printf("eFuse Vref:%u mV\n", adc_chars.vref);
-    vref = adc_chars.vref;
-  }
-  float voltage = analogRead(36) / 4096.0 * 6.566 * (vref / 1000.0);
-  if (voltage > 1 ) { // Only display if there is a valid reading
-    Serial.println("\nVoltage = " + String(voltage));
-    percentage = 2836.9625 * pow(voltage, 4) - 43987.4889 * pow(voltage, 3) + 255233.8134 * pow(voltage, 2) - 656689.7123 * voltage + 632041.7303;
-    if (voltage >= 4.20) percentage = 100;
-    if (voltage <= 3.20) percentage = 0;  // orig 3.5
+  // use builtin to read and adjust to millivolts (twice instead of mult by 2)
+  // if you see irregular readings, it is probably noise on USB 5V line
+  // will go away when you run on battery exclusively
+#if T5_47_DEV
+    const uint8_t bat_adc_pin = 36;
+#else
+    const uint8_t bat_adc_pin = 14;
+#endif
+
+  int voltage = analogReadMilliVolts(bat_adc_pin) + analogReadMilliVolts(bat_adc_pin);
+  uint8_t newSOC;
+
+// use map calls to choose between three linear approximations to calculate SOC
+// first and last 10% are the most non-linear sections
+// middle 80% section (between knee1 and knee2) is typically linear
+// Modify the following defines for other chemistries, like lipo
+// which, for example, has a low cutoff voltage of 3.0v typical
+// Values are in millivolts
+
+// May need to define a minimum voltage for device operation experimentally
+// Check both the original Dev board and the newer S3 based board
+// This may require action at voltage above what is defined below
+// I woud like to add an 'alarm' for minimum device voltage to clear screen, 
+// display message and sleep until charging begun and user clicks reset.
+
+#if CHEM_LION
+  // values for Li-Ion chemistry, from NCR18650B datasheet, Dev board came with Li-Ion holder
+  #define BattTop 4150
+  #define BattKnee1 4000
+  #define BattKnee2 3300
+  #define BattFlat 3000
+#else
+  // values for Li-Po chemistry, from various sources, S3 boards are usually setup with Li-Po
+  #define BattTop 4150
+  #define BattKnee1 4000
+  #define BattKnee2 3400
+  #define BattFlat 3200
+#endif
+
+  // Use map calls to obtain SOC
+  if (voltage >= BattTop) newSOC = 100;
+  else if (voltage >= BattKnee1) // 90-100% range
+    newSOC = map(voltage, BattKnee1, BattTop, 90, 100);
+  else if (voltage >= BattKnee2) // 10-90% range
+    newSOC = map(voltage, BattKnee2, BattKnee1, 10, 90);
+  else if (voltage >= BattFlat) // 0-10% range
+    newSOC = map(voltage, BattFlat, BattKnee2, 0, 10);
+  else newSOC = 0;
+
+  if (voltage > 1000 ) { // Only display if there is a valid reading
+    Serial.println("Voltage = " + String(float(voltage)/1000));
+
     drawRect(x + 25, y - 14, 40, 15, Black);
     fillRect(x + 65, y - 10, 4, 7, Black);
-    fillRect(x + 27, y - 12, 36 * percentage / 100.0, 11, Black);
-    drawString(x + 85, y - 14, String(percentage) + "%  " + String(voltage, 1) + "v", LEFT);
-  }
+    fillRect(x + 27, y - 12, 36 * newSOC / 100.0, 11, Black);
+    drawString(x + 80, y - 14, String(newSOC) + "%  " + String(float(voltage)/1000, 2) + "v", LEFT);
+    }
 }
-
 
 // ######################################## Weather Symbol ########################################
 // Symbols are drawn on a relative 10x10grid and 1 scale unit = 1 drawing unit
