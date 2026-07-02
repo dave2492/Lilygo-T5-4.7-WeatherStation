@@ -1,5 +1,6 @@
 #include <Arduino.h>            // In-built
 #include <esp_task_wdt.h>       // In-built
+#include <esp_system.h>         // In-built, for esp_reset_reason()
 #include "freertos/FreeRTOS.h"  // In-built
 #include "freertos/task.h"      // In-built
 #include "epd_driver.h"         // https://github.com/Xinyuan-LilyGO/LilyGo-EPD47
@@ -11,6 +12,7 @@
 #include <time.h>               // In-built
 #include "user_settings.h"
 #include "forecast_record.h"
+#include "debug.h"
 
 #define SCREEN_WIDTH   EPD_WIDTH
 #define SCREEN_HEIGHT  EPD_HEIGHT
@@ -38,6 +40,7 @@ enum alignment {LEFT, RIGHT, CENTER};
 // Braces mean only init from hard reset
 RTC_DATA_ATTR int bootCount = { SYNC_EVERY_X_WAKES };
 int wakeupCause;
+int resetReason;  // esp_reset_reason(): distinguishes an actual reset (e.g. brownout) from a clean deep-sleep wake
 
 // Normal Global Variables
 boolean LargeIcon   = true;
@@ -200,10 +203,10 @@ void BeginSleep() {
   UpdateLocalTime();
   UpdateTimers();
   esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
-  Serial.println("This was wakeup number: " + String(bootCount) + "Reason: " + String(wakeupCause));
-  Serial.println("Awake for: " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
-  Serial.println("Entering " + String(SleepTimer) + " (secs) of sleep time");
-  Serial.end(); // stop input, wait for output buffers, then stop the service
+  DBG_PRINTLN("This was wakeup number: " + String(bootCount) + "Reason: " + String(wakeupCause));
+  DBG_PRINTLN("Awake for: " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
+  DBG_PRINTLN("Entering " + String(SleepTimer) + " (secs) of sleep time");
+  DBG_END(); // stop input, wait for output buffers, then stop the service
   delay(3000);
   esp_deep_sleep_start();  // Sleep for e.g. 30 minutes
 }
@@ -213,7 +216,7 @@ uint8_t StartWiFi() {
   int result =0;
   char errorChar = '0';
 
-  Serial.println("\r\nWiFi Connecting to: " + String(ssid));
+  DBG_PRINTLN("\r\nWiFi Connecting to: " + String(ssid));
   IPAddress dns(8, 8, 8, 8); // Use Google DNS, Does this really do anything?
   
   WiFi.disconnect();
@@ -224,7 +227,7 @@ uint8_t StartWiFi() {
   if (result != WL_CONNECTED)
   {
     if (result < 255) {errorChar += result;} else {errorChar='X';};
-    Serial.println("WiFi connection failed with error code: " + String(errorChar) + ", retrying...!");
+    DBG_PRINTLN("WiFi connection failed with error code: " + String(errorChar) + ", retrying...!");
     WiFi.disconnect(true); // delete SID/PWD
     delay(500);
     WiFi.begin(ssid, password);
@@ -233,13 +236,13 @@ uint8_t StartWiFi() {
   if (result == WL_CONNECTED)
   {
     wifi_signal = WiFi.RSSI(); // Get Wifi Signal strength now, because the WiFi will be turned off to save power!
-    Serial.println("WiFi connected at: " + WiFi.localIP().toString());
+    DBG_PRINTLN("WiFi connected at: " + WiFi.localIP().toString());
   }
   else 
   {
     if (result < 255) {errorChar += result;} else {errorChar='X';};
     wifi_signal = 0;
-    Serial.println("WiFi connection *** FAILED *** with error code: " + String(errorChar));
+    DBG_PRINTLN("WiFi connection *** FAILED *** with error code: " + String(errorChar));
   }
   return WiFi.status();
 }
@@ -247,24 +250,26 @@ uint8_t StartWiFi() {
 void StopWiFi() {
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
-  Serial.println("WiFi switched Off");
+  DBG_PRINTLN("WiFi switched Off");
 }
 
 void InitialiseSystem() {
   StartTime = millis();
   wakeupCause = esp_sleep_get_wakeup_cause();
-  Serial.begin(115200);
+  resetReason = esp_reset_reason();
+  DBG_INIT(115200);
   delay(1000);
   // comment this out since the S3 kills the USB when sleeping
   //while (!Serial);
-  Serial.println(String(__FILE__) + "\nStarting...");
+  DBG_PRINTLN(String(__FILE__) + "\nStarting...");
   // Incr and display bootCount
   bootCount++;
-  Serial.printf("Wakeup Number: %d\n", bootCount);
-  Serial.printf("Wakeup Cause: %d\n", wakeupCause);
+  DBG_PRINTF("Wakeup Number: %d\n", bootCount);
+  DBG_PRINTF("Wakeup Cause: %d\n", wakeupCause);
+  DBG_PRINTF("Reset Reason: %d\n", resetReason);
   epd_init();
   framebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), EPD_WIDTH * EPD_HEIGHT / 2);
-  if (!framebuffer) Serial.println("Memory alloc failed!");
+  if (!framebuffer) DBG_PRINTLN("Memory alloc failed!");
   memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
 }
 
@@ -272,10 +277,10 @@ void CheckTimeSync() {
   // Check if it's time to sync NTP
   if (bootCount >= SYNC_EVERY_X_WAKES) {
     bootCount = 0;
-    Serial.println("Threshold reached. Syncing NTP...");
+    DBG_PRINTLN("Threshold reached. Syncing NTP...");
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer, "time.nist.gov"); //(gmtOffset_sec, daylightOffset_sec, ntpServer)
   } else {
-    Serial.println("Skipping NTP sync to save power.");
+    DBG_PRINTLN("Skipping NTP sync to save power.");
   }
   // set the timezone and complete the time setup
   setenv("TZ", Timezone, 1);  //setenv()adds the "TZ" variable to the environment with a value TimeZone, only used if set to 1, 0 means no change
@@ -318,8 +323,8 @@ void setup() {
       Attempts++;
     }
     // Display weather data
-    if (RxWeather && RxForecast) { // Only if received both Weather or Forecast proceed
-      Serial.println("Received all weather data...");
+    if (RxWeather && RxForecast) { // Only if received both Weather and Forecast proceed
+      DBG_PRINTLN("Received all weather data...");
       StopWiFi();         // Reduces power consumption
       epd_poweron();      // Switch on EPD display
       epd_clear();        // Clear the screen
@@ -327,7 +332,7 @@ void setup() {
       epd_update();       // Update the display to show the information
     } else {
       // Data incomplete - print error msg
-      Serial.println("FAILDED to Receive weather data, skipping display...");
+      DBG_PRINTLN("FAILED to Receive all weather data, skipping display...");
     }
   }  // End of wifi connected
   // Nothing left to do
@@ -341,49 +346,49 @@ void Convert_Readings_to_Imperial() { // Only the first 3-hours are used
 }
 
 bool DecodeWeather(WiFiClient& json, String Type) {
-  Serial.print(F("\nDeserializing json... "));
+  DBG_PRINT(F("\nDeserializing json... "));
   JsonDocument doc;                                              // allocate the JsonDocument
   DeserializationError error = deserializeJson(doc, json); // Deserialize the JSON document
   if (error) {                                             // Test if parsing succeeds.
-    Serial.print(F("deserializeJson() failed: "));
-    Serial.println(error.c_str());
+    DBG_PRINT(F("deserializeJson() failed: "));
+    DBG_PRINTLN(error.c_str());
     return false;
   }
   // convert it to a JsonObject
   JsonObject root = doc.as<JsonObject>();
-  Serial.println(" Decoding " + Type + " data");
+  DBG_PRINTLN(" Decoding " + Type + " data");
   if (Type == "weather") {
     WxConditions[0].High        = -50; // Minimum forecast low
     WxConditions[0].Low         = 50;  // Maximum Forecast High
     WxConditions[0].FTimezone   = doc["timezone_offset"]; // "0"
-    WxConditions[0].Sunrise     = root["sys"]["sunrise"].as<int>();                Serial.println("SRis: " + String(WxConditions[0].Sunrise));
-    WxConditions[0].Sunset      = root["sys"]["sunset"].as<int>();                 Serial.println("SSet: " + String(WxConditions[0].Sunset));
-    WxConditions[0].Temperature = root["main"]["temp"].as<float>();                Serial.println("Temp: " + String(WxConditions[0].Temperature));
-    WxConditions[0].FeelsLike   = root["main"]["feels_like"].as<float>();          Serial.println("FLik: " + String(WxConditions[0].FeelsLike));
-    WxConditions[0].Pressure    = root["main"]["pressure"].as<int>();              Serial.println("Pres: " + String(WxConditions[0].Pressure));
-    WxConditions[0].Humidity    = root["main"]["humidity"].as<int>();              Serial.println("Humi: " + String(WxConditions[0].Humidity));
-    WxConditions[0].Cloudcover  = root["clouds"]["all"].as<int>();                 Serial.println("CCov: " + String(WxConditions[0].Cloudcover));
-    WxConditions[0].Visibility  = root["visibility"].as<int>();                    Serial.println("Visi: " + String(WxConditions[0].Visibility));
-    WxConditions[0].Windspeed   = root["wind"]["speed"].as<float>();               Serial.println("WSpd: " + String(WxConditions[0].Windspeed));
-    WxConditions[0].Winddir     = root["wind"]["deg"].as<float>();                 Serial.println("WDir: " + String(WxConditions[0].Winddir));
-    WxConditions[0].Forecast0   = root["weather"][0]["description"].as<const char*>();      Serial.println("Fore: " + String(WxConditions[0].Forecast0));
-    WxConditions[0].Icon        = root["weather"][0]["icon"].as<const char*>();             Serial.println("Icon: " + String(WxConditions[0].Icon));
+    WxConditions[0].Sunrise     = root["sys"]["sunrise"].as<int>();                DBG_PRINTLN("SRis: " + String(WxConditions[0].Sunrise));
+    WxConditions[0].Sunset      = root["sys"]["sunset"].as<int>();                 DBG_PRINTLN("SSet: " + String(WxConditions[0].Sunset));
+    WxConditions[0].Temperature = root["main"]["temp"].as<float>();                DBG_PRINTLN("Temp: " + String(WxConditions[0].Temperature));
+    WxConditions[0].FeelsLike   = root["main"]["feels_like"].as<float>();          DBG_PRINTLN("FLik: " + String(WxConditions[0].FeelsLike));
+    WxConditions[0].Pressure    = root["main"]["pressure"].as<int>();              DBG_PRINTLN("Pres: " + String(WxConditions[0].Pressure));
+    WxConditions[0].Humidity    = root["main"]["humidity"].as<int>();              DBG_PRINTLN("Humi: " + String(WxConditions[0].Humidity));
+    WxConditions[0].Cloudcover  = root["clouds"]["all"].as<int>();                 DBG_PRINTLN("CCov: " + String(WxConditions[0].Cloudcover));
+    WxConditions[0].Visibility  = root["visibility"].as<int>();                    DBG_PRINTLN("Visi: " + String(WxConditions[0].Visibility));
+    WxConditions[0].Windspeed   = root["wind"]["speed"].as<float>();               DBG_PRINTLN("WSpd: " + String(WxConditions[0].Windspeed));
+    WxConditions[0].Winddir     = root["wind"]["deg"].as<float>();                 DBG_PRINTLN("WDir: " + String(WxConditions[0].Winddir));
+    WxConditions[0].Forecast0   = root["weather"][0]["description"].as<const char*>();      DBG_PRINTLN("Fore: " + String(WxConditions[0].Forecast0));
+    WxConditions[0].Icon        = root["weather"][0]["icon"].as<const char*>();             DBG_PRINTLN("Icon: " + String(WxConditions[0].Icon));
   }
   if (Type == "forecast") {
-    //Serial.println(json);
-    Serial.print(F("\nReceiving Forecast period - ")); //------------------------------------------------
+    //DBG_PRINTLN(json);
+    DBG_PRINT(F("\nReceiving Forecast period - ")); //------------------------------------------------
     JsonArray list                    = root["list"];
     for (byte r = 0; r < max_readings; r++) {
-      Serial.println("\nPeriod-" + String(r) + "--------------");
+      DBG_PRINTLN("\nPeriod-" + String(r) + "--------------");
       WxForecast[r].Dt                = list[r]["dt"].as<int>();
-      WxForecast[r].Temperature       = list[r]["main"]["temp"].as<float>();       Serial.println("Temp: " + String(WxForecast[r].Temperature));
-      WxForecast[r].Low               = list[r]["main"]["temp_min"].as<float>();   Serial.println("TLow: " + String(WxForecast[r].Low));
-      WxForecast[r].High              = list[r]["main"]["temp_max"].as<float>();   Serial.println("THig: " + String(WxForecast[r].High));
-      WxForecast[r].Pressure          = list[r]["main"]["pressure"].as<float>();   Serial.println("Pres: " + String(WxForecast[r].Pressure));
-      WxForecast[r].Humidity          = list[r]["main"]["humidity"].as<float>();   Serial.println("Humi: " + String(WxForecast[r].Humidity));
-      WxForecast[r].Icon              = list[r]["weather"][0]["icon"].as<const char*>(); Serial.println("Icon: " + String(WxForecast[r].Icon));
-      WxForecast[r].Rainfall          = list[r]["rain"]["3h"].as<float>();         Serial.println("Rain: " + String(WxForecast[r].Rainfall));
-      WxForecast[r].Snowfall          = list[r]["snow"]["3h"].as<float>();         Serial.println("Snow: " + String(WxForecast[r].Snowfall));
+      WxForecast[r].Temperature       = list[r]["main"]["temp"].as<float>();       DBG_PRINTLN("Temp: " + String(WxForecast[r].Temperature));
+      WxForecast[r].Low               = list[r]["main"]["temp_min"].as<float>();   DBG_PRINTLN("TLow: " + String(WxForecast[r].Low));
+      WxForecast[r].High              = list[r]["main"]["temp_max"].as<float>();   DBG_PRINTLN("THig: " + String(WxForecast[r].High));
+      WxForecast[r].Pressure          = list[r]["main"]["pressure"].as<float>();   DBG_PRINTLN("Pres: " + String(WxForecast[r].Pressure));
+      WxForecast[r].Humidity          = list[r]["main"]["humidity"].as<float>();   DBG_PRINTLN("Humi: " + String(WxForecast[r].Humidity));
+      WxForecast[r].Icon              = list[r]["weather"][0]["icon"].as<const char*>(); DBG_PRINTLN("Icon: " + String(WxForecast[r].Icon));
+      WxForecast[r].Rainfall          = list[r]["rain"]["3h"].as<float>();         DBG_PRINTLN("Rain: " + String(WxForecast[r].Rainfall));
+      WxForecast[r].Snowfall          = list[r]["snow"]["3h"].as<float>();         DBG_PRINTLN("Snow: " + String(WxForecast[r].Snowfall));
       if (r < 8) { // Check next 3 x 8 Hours = 1 day
         if (WxForecast[r].High > WxConditions[0].High) WxConditions[0].High = WxForecast[r].High; // Get Highest temperature for next 24Hrs
         if (WxForecast[r].Low  < WxConditions[0].Low)  WxConditions[0].Low  = WxForecast[r].Low;  // Get Lowest  temperature for next 24Hrs
@@ -425,9 +430,9 @@ bool obtainWeatherData(WiFiClient & client, const String & RequestType) {
   // awaited on version v2.5
   //api.openweathermap.org/data/2.5/RequestType?lat={lat}&lon={lon}&appid={API key}
   String uri = "/data/"+Version+"/"+RequestType+"?lat=" + Latitude + "&lon=" + Longitude + "&appid=" + apikey + "&mode=json&units=" + units + "&lang=" + Language;
-  Serial.print("Connecting: ");
-  Serial.print(server + uri);
-  Serial.println();
+  DBG_PRINT("Connecting: ");
+  DBG_PRINT(server + uri);
+  DBG_PRINTLN();
   if (RequestType == "onecall") uri += "&exclude=minutely,hourly,alerts,daily";
   http.begin(client, server, 80, uri); 
   int httpCode = http.GET();
@@ -437,7 +442,7 @@ bool obtainWeatherData(WiFiClient & client, const String & RequestType) {
   }
   else
   {
-    Serial.printf("connection failed, http error code %i %s\n", httpCode, http.errorToString(httpCode));
+    DBG_PRINTF("connection failed, http error code %i %s\n", httpCode, http.errorToString(httpCode));
     client.stop();
     http.end();
     return false;
@@ -498,7 +503,7 @@ void DisplayGeneralInfoSection() {
   setFont(OpenSans10B);
   drawString(15, 2, City, LEFT);
 //  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str, CENTER);
-  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + "  ct  " + String(bootCount) + " rsn " + String(wakeupCause), CENTER);
+  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + "  ct  " + String(bootCount) + " rr " + String(wakeupCause) + " esp " + String(resetReason), CENTER);
 }
 
 void DisplayWeatherIcon(int x, int y) {
@@ -605,7 +610,7 @@ void DisplayForecastTextSection(int x, int y) {
 
 void DisplayVisiCCoverSection(int x, int y) {
   setFont(OpenSans12B);
-  Serial.print("=========================="); Serial.println(WxConditions[0].Visibility);
+  DBG_PRINT("=========================="); DBG_PRINTLN(WxConditions[0].Visibility);
   DrawPressureAndTrend(x - 15, y + 9, WxConditions[0].Pressure, WxConditions[0].Trend);
   Visibility(x + 115, y, String(WxConditions[0].Visibility) + "M");
   CloudCover(x + 265, y, WxConditions[0].Cloudcover);
@@ -743,7 +748,7 @@ void DisplayGraphSection(int x, int y) {
 }
 
 void DisplayConditionsSection(int x, int y, String IconName, bool IconSize) {
-  Serial.println("Icon name: " + IconName);
+  DBG_PRINTLN("Icon name: " + IconName);
   if      (IconName == "01d" || IconName == "01n") ClearSky(x, y, IconSize, IconName);
   else if (IconName == "02d" || IconName == "02n") FewClouds(x, y, IconSize, IconName);
   else if (IconName == "03d" || IconName == "03n") ScatteredClouds(x, y, IconSize, IconName);
@@ -823,14 +828,14 @@ boolean UpdateLocalTime() {
   struct tm timeinfo;
   char   time_output[30], day_output[30], update_time[30];
   while (!getLocalTime(&timeinfo, 10000)) { // Wait up to 10-sec for time to synchronise
-    Serial.println("Failed to obtain time");
+    DBG_PRINTLN("Failed to obtain time");
     return false;
   }
   CurrentHour = timeinfo.tm_hour;
   CurrentMin  = timeinfo.tm_min;
   CurrentSec  = timeinfo.tm_sec;
   //See http://www.cplusplus.com/reference/ctime/strftime/
-  Serial.println(&timeinfo, "%a %b %d %Y   %H:%M:%S");      // Displays: Saturday, June 24 2017 14:05:49
+  DBG_PRINTLN(&timeinfo, "%a %b %d %Y   %H:%M:%S");      // Displays: Saturday, June 24 2017 14:05:49
   if (Units == "M") {
     sprintf(day_output, "%s, %02u %s %04u", weekday_D[timeinfo.tm_wday], timeinfo.tm_mday, month_M[timeinfo.tm_mon], (timeinfo.tm_year) + 1900);
     strftime(update_time, sizeof(update_time), "%H:%M:%S", &timeinfo);  // Creates: '@ 14:05:49'   and change from 30 to 8 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
@@ -898,7 +903,7 @@ void DrawBattery(int x, int y) {
   else newSOC = 0;
 
   if (voltage > 1000 ) { // Only display if there is a valid reading
-    Serial.println("Voltage = " + String(float(voltage)/1000));
+    DBG_PRINTLN("Voltage = " + String(float(voltage)/1000));
 
     drawRect(x + 25, y - 14, 40, 15, Black);
     fillRect(x + 65, y - 10, 4, 7, Black);

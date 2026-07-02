@@ -2,31 +2,29 @@
 
 1.1 TBD
 ```
-
+Replace serial calls with macros and set disabled initially
 ```
 
-1.0 Initial Baseline Version
+1.0 Initial Baseline Version - Jul 1, 2026
 ```
+Added REVISIONS.md to document changes
 Use JsonDocument instead of deprecated DynamicJsonDocument
 Converted from INO to CPP
-Added WiFi connect retries 
+Added WiFi connect retry 
 New Battery SOC Calculation
-Change NTP sync to once per day
+Change NTP sync to once per day (always if reset)
 Overnight single sleep period
 Main loop restructure
 ```
 
 TODO
 ```
-Migrate to git controlled
-Commit my baseline existing changes
-Add revisions and todo and espconnect how-to files to git
-Disable serial monitor and test if fixes the reset reason problem on S3 board
-Add littlfs
+Add ESPCONNECT.md how-to
+Add littlfs support
 Migrate to stored config
-Modify README.md to document revisions and todo files
-Add debug level logging
-Write to log instead of serial monitor (config controlled)
+Write to log instead of serial monitor
+Modify DBG_PRINT macros to support debug levels set in stored config
+Modify README.md to be decscriptive of ths fork
 Add critical error message writes to display
 Modify NTP sync to compensate for drift when setting sleep duration
 Rain / Snow precipitation as different bar fill (port from viktormail.ha)

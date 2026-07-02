@@ -4,3 +4,5 @@
 .vscode/launch.json
 .vscode/ipch
 .vscode/settings.json
+src/user_dave_settings.h
+src/user_roy_settings.h
