@@ -2,12 +2,13 @@
 
 1.1 TBD
 ```
-Replace serial calls with macros and set disabled initially
+
 ```
 
 1.0 Initial Baseline Version - Jul 1, 2026
 ```
 Added REVISIONS.md to document changes
+Replaced serial calls with macros and set the default to disable serial printing (for now)
 Use JsonDocument instead of deprecated DynamicJsonDocument
 Converted from INO to CPP
 Added WiFi connect retry 
@@ -19,9 +20,9 @@ Main loop restructure
 
 TODO
 ```
-Add ESPCONNECT.md how-to
 Add littlfs support
 Migrate to stored config
+Add ESPCONNECT.md how-to
 Write to log instead of serial monitor
 Modify DBG_PRINT macros to support debug levels set in stored config
 Modify README.md to be decscriptive of ths fork
