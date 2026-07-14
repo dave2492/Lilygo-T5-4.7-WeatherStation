@@ -1,6 +1,7 @@
 #include <Arduino.h>            // In-built
 #include <esp_task_wdt.h>       // In-built
 #include <esp_system.h>         // In-built, for esp_reset_reason()
+#include "soc/rtc_cntl_reg.h"   // In-built, for the brownout detector workaround below
 #include "freertos/FreeRTOS.h"  // In-built
 #include "freertos/task.h"      // In-built
 #include "epd_driver.h"         // https://github.com/Xinyuan-LilyGO/LilyGo-EPD47
@@ -10,9 +11,19 @@
 #include <WiFi.h>               // In-built
 #include <SPI.h>                // In-built
 #include <time.h>               // In-built
-#include "user_settings.h"
+#include <LittleFS.h>           // In-built
+#include "user_config.h"
 #include "forecast_record.h"
 #include "debug.h"
+
+const char server[] = "api.openweathermap.org";
+//http://api.openweathermap.org/data/2.5/forecast?q=Melksham,UK&APPID=your_OWM_API_key&mode=json&units=metric&cnt=40
+//http://api.openweathermap.org/data/2.5/weather?q=Melksham,UK&APPID=your_OWM_API_key&mode=json&units=metric&cnt=1
+
+// Select language to use or add your own translation
+#include "lang.h"
+//#include "lang_fr.h"
+//#include "lang_de.h"
 
 #define SCREEN_WIDTH   EPD_WIDTH
 #define SCREEN_HEIGHT  EPD_HEIGHT
@@ -34,6 +45,20 @@ enum alignment {LEFT, RIGHT, CENTER};
 // Skip NTP sync X times returning from deep sleep (currently 9 hours)
 // Note we always sync after an overnight wakeup or hard reset
 #define SYNC_EVERY_X_WAKES 18
+
+// TEMPORARY WORKAROUND for a confirmed hardware brownout on this board: the EPD
+// refresh's current spike sags the rail enough to trip the brownout detector and
+// force a reset instead of a clean deep-sleep wake. A second contributing factor:
+// an unused op-amp in a dual op-amp package is left with floating inputs, which can
+// break into oscillation and pull the rail down further. Remove once the hardware
+// fix (tie the floating op-amp inputs, extra bulk capacitance / better regulator)
+// is in place - see REVISIONS.md.
+#define DISABLE_BROWNOUT_DETECTOR 1
+
+// Underclock the CPU during EPD power-on/refresh to reduce peak current draw and
+// lessen the brownout risk directly, independent of the detector workaround above.
+#define REDUCE_CPU_FREQ_FOR_EPD 1
+#define EPD_CPU_FREQ_MHZ 80
 
 // RTC Memory Variables (preserved during deep sleep)
 // Init to max value to trigger NTP after a hard reset
@@ -92,6 +117,7 @@ void BeginSleep();
 uint8_t StartWiFi();
 void StopWiFi();
 void InitialiseSystem();
+bool LoadUserConfig();
 void CheckTimeSync();
 void TriggerTimeSync();
 void Convert_Readings_to_Imperial();
@@ -221,7 +247,7 @@ uint8_t StartWiFi() {
   
   WiFi.disconnect();
   WiFi.mode(WIFI_STA); // switch off AP
-  WiFi.begin(ssid, password);
+  WiFi.begin(ssid.c_str(), password.c_str());
   
   result = WiFi.waitForConnectResult(); // will wait for connect or failure or timeout
   if (result != WL_CONNECTED)
@@ -230,7 +256,7 @@ uint8_t StartWiFi() {
     DBG_PRINTLN("WiFi connection failed with error code: " + String(errorChar) + ", retrying...!");
     WiFi.disconnect(true); // delete SID/PWD
     delay(500);
-    WiFi.begin(ssid, password);
+    WiFi.begin(ssid.c_str(), password.c_str());
     result = WiFi.waitForConnectResult(); // will wait for connect or failure or timeout
   }
   if (result == WL_CONNECTED)
@@ -273,17 +299,62 @@ void InitialiseSystem() {
   memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
 }
 
+// Mounts LittleFS and populates the user_config.h globals from /user_config.json.
+// Returns false (without touching the globals) if the partition can't be mounted,
+// the file is missing, the JSON is malformed, or required fields are empty - the
+// caller is expected to show a visible error, since there may be no serial monitor
+// attached to see why.
+bool LoadUserConfig() {
+  if (!LittleFS.begin(false)) {
+    DBG_PRINTLN("LittleFS mount failed - is the filesystem image flashed? (pio run -t uploadfs)");
+    return false;
+  }
+  File configFile = LittleFS.open("/user_config.json", "r");
+  if (!configFile) {
+    DBG_PRINTLN("/user_config.json not found on LittleFS");
+    return false;
+  }
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, configFile);
+  configFile.close();
+  if (error) {
+    DBG_PRINT("/user_config.json parse failed: ");
+    DBG_PRINTLN(error.c_str());
+    return false;
+  }
+
+  ssid               = doc["ssid"].as<String>();
+  password           = doc["password"].as<String>();
+  apikey             = doc["apikey"].as<String>();
+  City               = doc["City"].as<String>();
+  Latitude           = doc["Latitude"].as<String>();
+  Longitude          = doc["Longitude"].as<String>();
+  Language           = doc["Language"].as<String>();
+  Hemisphere         = doc["Hemisphere"].as<String>();
+  Units              = doc["Units"].as<String>();
+  Timezone           = doc["Timezone"].as<String>();
+  ntpServer          = doc["ntpServer"].as<String>();
+  gmtOffset_sec      = doc["gmtOffset_sec"].as<int>();
+  daylightOffset_sec = doc["daylightOffset_sec"].as<int>();
+
+  if (ssid.length() == 0 || apikey.length() == 0) {
+    DBG_PRINTLN("/user_config.json missing required fields (ssid/apikey)");
+    return false;
+  }
+  return true;
+}
+
 void CheckTimeSync() {
   // Check if it's time to sync NTP
   if (bootCount >= SYNC_EVERY_X_WAKES) {
     bootCount = 0;
     DBG_PRINTLN("Threshold reached. Syncing NTP...");
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer, "time.nist.gov"); //(gmtOffset_sec, daylightOffset_sec, ntpServer)
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer.c_str(), "time.nist.gov"); //(gmtOffset_sec, daylightOffset_sec, ntpServer)
   } else {
     DBG_PRINTLN("Skipping NTP sync to save power.");
   }
   // set the timezone and complete the time setup
-  setenv("TZ", Timezone, 1);  //setenv()adds the "TZ" variable to the environment with a value TimeZone, only used if set to 1, 0 means no change
+  setenv("TZ", Timezone.c_str(), 1);  //setenv()adds the "TZ" variable to the environment with a value TimeZone, only used if set to 1, 0 means no change
   tzset(); // Set the TZ environment variable
   delay(100);
   UpdateLocalTime();
@@ -300,41 +371,75 @@ void loop() {
 }
 
 void setup() {
+#if DISABLE_BROWNOUT_DETECTOR
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // See DISABLE_BROWNOUT_DETECTOR comment above
+#endif
   InitialiseSystem();
-  // Connect to Internet
-  if (StartWiFi() == false) {
-    // Failed - Not much to do then...
-    StopWiFi();         // Reduces power consumption
+  if (!LoadUserConfig()) {
+    // Can't do anything meaningful without config - show a visible error (there may
+    // be no serial monitor attached) and retry next wake.
+#if REDUCE_CPU_FREQ_FOR_EPD
+    uint32_t cpuFreqMhz = getCpuFrequencyMhz();
+    setCpuFrequencyMhz(EPD_CPU_FREQ_MHZ); // Lower peak current draw during EPD refresh
+#endif
     epd_poweron();      // Switch on EPD display
     epd_clear();        // Clear the screen
-    DisplayStatusSection(600, 20, wifi_signal);    // Wi-Fi signal strength and Battery voltage
+    setFont(OpenSans12B);
+    drawString(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, "Config error - check /user_config.json", CENTER);
     epd_update();       // Update the display to show the information
+#if REDUCE_CPU_FREQ_FOR_EPD
+    setCpuFrequencyMhz(cpuFreqMhz);
+#endif
   } else {
-    // Connected! Continue...
-    CheckTimeSync();    // Run an NTP sync if necessary
-    // Get weather data
-    byte Attempts = 1;
-    bool RxWeather  = false;
-    bool RxForecast = false;
-    WiFiClient client;   // wifi client object
-    while ((RxWeather == false || RxForecast == false) && Attempts <= 2) { // Try up-to 2 time for Weather and Forecast data
-      if (RxWeather  == false) RxWeather  = obtainWeatherData(client, "weather");
-      if (RxForecast == false) RxForecast = obtainWeatherData(client, "forecast");
-      Attempts++;
-    }
-    // Display weather data
-    if (RxWeather && RxForecast) { // Only if received both Weather and Forecast proceed
-      DBG_PRINTLN("Received all weather data...");
+    // Connect to Internet
+    if (StartWiFi() == false) {
+      // Failed - Not much to do then...
       StopWiFi();         // Reduces power consumption
+  #if REDUCE_CPU_FREQ_FOR_EPD
+      uint32_t cpuFreqMhz = getCpuFrequencyMhz();
+      setCpuFrequencyMhz(EPD_CPU_FREQ_MHZ); // Lower peak current draw during EPD refresh
+  #endif
       epd_poweron();      // Switch on EPD display
       epd_clear();        // Clear the screen
-      DisplayWeather();   // Display the weather data
+      DisplayStatusSection(600, 20, wifi_signal);    // Wi-Fi signal strength and Battery voltage
       epd_update();       // Update the display to show the information
+  #if REDUCE_CPU_FREQ_FOR_EPD
+      setCpuFrequencyMhz(cpuFreqMhz);
+  #endif
     } else {
-      // Data incomplete - print error msg
-      DBG_PRINTLN("FAILED to Receive all weather data, skipping display...");
-    }
-  }  // End of wifi connected
+      // Connected! Continue...
+      CheckTimeSync();    // Run an NTP sync if necessary
+      // Get weather data
+      byte Attempts = 1;
+      bool RxWeather  = false;
+      bool RxForecast = false;
+      WiFiClient client;   // wifi client object
+      while ((RxWeather == false || RxForecast == false) && Attempts <= 2) { // Try up-to 2 time for Weather and Forecast data
+        if (RxWeather  == false) RxWeather  = obtainWeatherData(client, "weather");
+        if (RxForecast == false) RxForecast = obtainWeatherData(client, "forecast");
+        Attempts++;
+      }
+      // Display weather data
+      if (RxWeather && RxForecast) { // Only if received both Weather and Forecast proceed
+        DBG_PRINTLN("Received all weather data...");
+        StopWiFi();         // Reduces power consumption
+  #if REDUCE_CPU_FREQ_FOR_EPD
+        uint32_t cpuFreqMhz = getCpuFrequencyMhz();
+        setCpuFrequencyMhz(EPD_CPU_FREQ_MHZ); // Lower peak current draw during EPD refresh
+  #endif
+        epd_poweron();      // Switch on EPD display
+        epd_clear();        // Clear the screen
+        DisplayWeather();   // Display the weather data
+        epd_update();       // Update the display to show the information
+  #if REDUCE_CPU_FREQ_FOR_EPD
+        setCpuFrequencyMhz(cpuFreqMhz);
+  #endif
+      } else {
+        // Data incomplete - print error msg
+        DBG_PRINTLN("FAILED to Receive all weather data, skipping display...");
+      }
+    }  // End of wifi connected
+  }  // End of config loaded
   // Nothing left to do
   BeginSleep();
 }

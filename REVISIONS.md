@@ -2,6 +2,9 @@
 
 1.1 TBD
 ```
+Added littleFS support
+Migrated to stored config and added user_config.md document
+Error message write to device display if cannot load / parse user_config.json
 
 ```
 
@@ -20,15 +23,14 @@ Main loop restructure
 
 TODO
 ```
-Add littlfs support
-Migrate to stored config
-Add ESPCONNECT.md how-to
-Write to log instead of serial monitor
-Modify DBG_PRINT macros to support debug levels set in stored config
-Modify README.md to be decscriptive of ths fork
-Add critical error message writes to display
-Modify NTP sync to compensate for drift when setting sleep duration
+Write to logfile instead of serial monitor
+Modify DBG_PRINT macros to support debug levels
+Add limiter for debug log files, perhaps one per reset/wakeup and specifiy max number?
+Add critical error message writes to device display
+Add ESPCONNECT how-to for user as well as dev bin file build
+Modify README.md to be descriptive of this fork
+Modify RTC code to compensate for drift between NTP syncs
 Rain / Snow precipitation as different bar fill (port from viktormail.ha)
-Add ...
-
+Consider more descriptive icons (port from viktormail.ha?)
+Document sucessful mods to fix 2024 device's wake from sleep as reset event
 ```
