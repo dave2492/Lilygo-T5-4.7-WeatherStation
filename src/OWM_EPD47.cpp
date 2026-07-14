@@ -242,7 +242,7 @@ uint8_t StartWiFi() {
   int result =0;
   char errorChar = '0';
 
-  DBG_PRINTLN("\r\nWiFi Connecting to: " + String(ssid));
+  DBG_PRINTLN("WiFi Connecting to: " + String(ssid));
   IPAddress dns(8, 8, 8, 8); // Use Google DNS, Does this really do anything?
   
   WiFi.disconnect();
@@ -262,7 +262,7 @@ uint8_t StartWiFi() {
   if (result == WL_CONNECTED)
   {
     wifi_signal = WiFi.RSSI(); // Get Wifi Signal strength now, because the WiFi will be turned off to save power!
-    DBG_PRINTLN("WiFi connected at: " + WiFi.localIP().toString());
+    DBG_PRINTLN("WiFi obtained IP: " + WiFi.localIP().toString());
   }
   else 
   {
@@ -287,7 +287,7 @@ void InitialiseSystem() {
   delay(1000);
   // comment this out since the S3 kills the USB when sleeping
   //while (!Serial);
-  DBG_PRINTLN(String(__FILE__) + "\nStarting...");
+  DBG_PRINTLN("\n" + String(__FILE__) + "\nStarting...");
   // Incr and display bootCount
   bootCount++;
   DBG_PRINTF("Wakeup Number: %d\n", bootCount);
