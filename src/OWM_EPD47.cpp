@@ -268,7 +268,7 @@ uint8_t StartWiFi() {
   {
     if (result < 255) {errorChar += result;} else {errorChar='X';};
     wifi_signal = 0;
-    DBG_PRINTLN("WiFi connection *** FAILED *** with error code: " + String(errorChar));
+    DBG_PRINTLNE("WiFi connection *** FAILED *** with error code: " + String(errorChar));
   }
   return WiFi.status();
 }
@@ -295,7 +295,7 @@ void InitialiseSystem() {
   DBG_PRINTF("Reset Reason: %d\n", resetReason);
   epd_init();
   framebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), EPD_WIDTH * EPD_HEIGHT / 2);
-  if (!framebuffer) DBG_PRINTLN("Memory alloc failed!");
+  if (!framebuffer) DBG_PRINTLNE("Memory alloc failed!");
   memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
 }
 
@@ -306,20 +306,20 @@ void InitialiseSystem() {
 // attached to see why.
 bool LoadUserConfig() {
   if (!LittleFS.begin(false)) {
-    DBG_PRINTLN("LittleFS mount failed - is the filesystem image flashed? (pio run -t uploadfs)");
+    DBG_PRINTLNE("LittleFS mount failed - is the filesystem image flashed? (pio run -t uploadfs)");
     return false;
   }
   File configFile = LittleFS.open("/user_config.json", "r");
   if (!configFile) {
-    DBG_PRINTLN("/user_config.json not found on LittleFS");
+    DBG_PRINTLNE("/user_config.json not found on LittleFS");
     return false;
   }
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, configFile);
   configFile.close();
   if (error) {
-    DBG_PRINT("/user_config.json parse failed: ");
-    DBG_PRINTLN(error.c_str());
+    DBG_PRINTE("/user_config.json parse failed: ");
+    DBG_PRINTLNE(error.c_str());
     return false;
   }
 
@@ -336,9 +336,10 @@ bool LoadUserConfig() {
   ntpServer          = doc["ntpServer"].as<String>();
   gmtOffset_sec      = doc["gmtOffset_sec"].as<int>();
   daylightOffset_sec = doc["daylightOffset_sec"].as<int>();
+  DBG_SET_LEVEL(doc["DebugLevel"].as<String>()); // optional; defaults to INFO if missing/unrecognized
 
   if (ssid.length() == 0 || apikey.length() == 0) {
-    DBG_PRINTLN("/user_config.json missing required fields (ssid/apikey)");
+    DBG_PRINTLNE("/user_config.json missing required fields (ssid/apikey)");
     return false;
   }
   return true;
@@ -451,49 +452,49 @@ void Convert_Readings_to_Imperial() { // Only the first 3-hours are used
 }
 
 bool DecodeWeather(WiFiClient& json, String Type) {
-  DBG_PRINT(F("\nDeserializing json... "));
+  DBG_PRINTV(F("\nDeserializing json... "));
   JsonDocument doc;                                              // allocate the JsonDocument
   DeserializationError error = deserializeJson(doc, json); // Deserialize the JSON document
   if (error) {                                             // Test if parsing succeeds.
-    DBG_PRINT(F("deserializeJson() failed: "));
-    DBG_PRINTLN(error.c_str());
+    DBG_PRINTE(F("deserializeJson() failed: "));
+    DBG_PRINTLNE(error.c_str());
     return false;
   }
   // convert it to a JsonObject
   JsonObject root = doc.as<JsonObject>();
-  DBG_PRINTLN(" Decoding " + Type + " data");
+  DBG_PRINTLNV(" Decoding " + Type + " data");
   if (Type == "weather") {
     WxConditions[0].High        = -50; // Minimum forecast low
     WxConditions[0].Low         = 50;  // Maximum Forecast High
     WxConditions[0].FTimezone   = doc["timezone_offset"]; // "0"
-    WxConditions[0].Sunrise     = root["sys"]["sunrise"].as<int>();                DBG_PRINTLN("SRis: " + String(WxConditions[0].Sunrise));
-    WxConditions[0].Sunset      = root["sys"]["sunset"].as<int>();                 DBG_PRINTLN("SSet: " + String(WxConditions[0].Sunset));
-    WxConditions[0].Temperature = root["main"]["temp"].as<float>();                DBG_PRINTLN("Temp: " + String(WxConditions[0].Temperature));
-    WxConditions[0].FeelsLike   = root["main"]["feels_like"].as<float>();          DBG_PRINTLN("FLik: " + String(WxConditions[0].FeelsLike));
-    WxConditions[0].Pressure    = root["main"]["pressure"].as<int>();              DBG_PRINTLN("Pres: " + String(WxConditions[0].Pressure));
-    WxConditions[0].Humidity    = root["main"]["humidity"].as<int>();              DBG_PRINTLN("Humi: " + String(WxConditions[0].Humidity));
-    WxConditions[0].Cloudcover  = root["clouds"]["all"].as<int>();                 DBG_PRINTLN("CCov: " + String(WxConditions[0].Cloudcover));
-    WxConditions[0].Visibility  = root["visibility"].as<int>();                    DBG_PRINTLN("Visi: " + String(WxConditions[0].Visibility));
-    WxConditions[0].Windspeed   = root["wind"]["speed"].as<float>();               DBG_PRINTLN("WSpd: " + String(WxConditions[0].Windspeed));
-    WxConditions[0].Winddir     = root["wind"]["deg"].as<float>();                 DBG_PRINTLN("WDir: " + String(WxConditions[0].Winddir));
-    WxConditions[0].Forecast0   = root["weather"][0]["description"].as<const char*>();      DBG_PRINTLN("Fore: " + String(WxConditions[0].Forecast0));
-    WxConditions[0].Icon        = root["weather"][0]["icon"].as<const char*>();             DBG_PRINTLN("Icon: " + String(WxConditions[0].Icon));
+    WxConditions[0].Sunrise     = root["sys"]["sunrise"].as<int>();                DBG_PRINTLNV("SRis: " + String(WxConditions[0].Sunrise));
+    WxConditions[0].Sunset      = root["sys"]["sunset"].as<int>();                 DBG_PRINTLNV("SSet: " + String(WxConditions[0].Sunset));
+    WxConditions[0].Temperature = root["main"]["temp"].as<float>();                DBG_PRINTLNV("Temp: " + String(WxConditions[0].Temperature));
+    WxConditions[0].FeelsLike   = root["main"]["feels_like"].as<float>();          DBG_PRINTLNV("FLik: " + String(WxConditions[0].FeelsLike));
+    WxConditions[0].Pressure    = root["main"]["pressure"].as<int>();              DBG_PRINTLNV("Pres: " + String(WxConditions[0].Pressure));
+    WxConditions[0].Humidity    = root["main"]["humidity"].as<int>();              DBG_PRINTLNV("Humi: " + String(WxConditions[0].Humidity));
+    WxConditions[0].Cloudcover  = root["clouds"]["all"].as<int>();                 DBG_PRINTLNV("CCov: " + String(WxConditions[0].Cloudcover));
+    WxConditions[0].Visibility  = root["visibility"].as<int>();                    DBG_PRINTLNV("Visi: " + String(WxConditions[0].Visibility));
+    WxConditions[0].Windspeed   = root["wind"]["speed"].as<float>();               DBG_PRINTLNV("WSpd: " + String(WxConditions[0].Windspeed));
+    WxConditions[0].Winddir     = root["wind"]["deg"].as<float>();                 DBG_PRINTLNV("WDir: " + String(WxConditions[0].Winddir));
+    WxConditions[0].Forecast0   = root["weather"][0]["description"].as<const char*>();      DBG_PRINTLNV("Fore: " + String(WxConditions[0].Forecast0));
+    WxConditions[0].Icon        = root["weather"][0]["icon"].as<const char*>();             DBG_PRINTLNV("Icon: " + String(WxConditions[0].Icon));
   }
   if (Type == "forecast") {
-    //DBG_PRINTLN(json);
-    DBG_PRINT(F("\nReceiving Forecast period - ")); //------------------------------------------------
+    //DBG_PRINTLNV(json);
+    DBG_PRINTV(F("\nReceiving Forecast period - ")); //------------------------------------------------
     JsonArray list                    = root["list"];
     for (byte r = 0; r < max_readings; r++) {
-      DBG_PRINTLN("\nPeriod-" + String(r) + "--------------");
+      DBG_PRINTLNV("\nPeriod-" + String(r) + "--------------");
       WxForecast[r].Dt                = list[r]["dt"].as<int>();
-      WxForecast[r].Temperature       = list[r]["main"]["temp"].as<float>();       DBG_PRINTLN("Temp: " + String(WxForecast[r].Temperature));
-      WxForecast[r].Low               = list[r]["main"]["temp_min"].as<float>();   DBG_PRINTLN("TLow: " + String(WxForecast[r].Low));
-      WxForecast[r].High              = list[r]["main"]["temp_max"].as<float>();   DBG_PRINTLN("THig: " + String(WxForecast[r].High));
-      WxForecast[r].Pressure          = list[r]["main"]["pressure"].as<float>();   DBG_PRINTLN("Pres: " + String(WxForecast[r].Pressure));
-      WxForecast[r].Humidity          = list[r]["main"]["humidity"].as<float>();   DBG_PRINTLN("Humi: " + String(WxForecast[r].Humidity));
-      WxForecast[r].Icon              = list[r]["weather"][0]["icon"].as<const char*>(); DBG_PRINTLN("Icon: " + String(WxForecast[r].Icon));
-      WxForecast[r].Rainfall          = list[r]["rain"]["3h"].as<float>();         DBG_PRINTLN("Rain: " + String(WxForecast[r].Rainfall));
-      WxForecast[r].Snowfall          = list[r]["snow"]["3h"].as<float>();         DBG_PRINTLN("Snow: " + String(WxForecast[r].Snowfall));
+      WxForecast[r].Temperature       = list[r]["main"]["temp"].as<float>();       DBG_PRINTLNV("Temp: " + String(WxForecast[r].Temperature));
+      WxForecast[r].Low               = list[r]["main"]["temp_min"].as<float>();   DBG_PRINTLNV("TLow: " + String(WxForecast[r].Low));
+      WxForecast[r].High              = list[r]["main"]["temp_max"].as<float>();   DBG_PRINTLNV("THig: " + String(WxForecast[r].High));
+      WxForecast[r].Pressure          = list[r]["main"]["pressure"].as<float>();   DBG_PRINTLNV("Pres: " + String(WxForecast[r].Pressure));
+      WxForecast[r].Humidity          = list[r]["main"]["humidity"].as<float>();   DBG_PRINTLNV("Humi: " + String(WxForecast[r].Humidity));
+      WxForecast[r].Icon              = list[r]["weather"][0]["icon"].as<const char*>(); DBG_PRINTLNV("Icon: " + String(WxForecast[r].Icon));
+      WxForecast[r].Rainfall          = list[r]["rain"]["3h"].as<float>();         DBG_PRINTLNV("Rain: " + String(WxForecast[r].Rainfall));
+      WxForecast[r].Snowfall          = list[r]["snow"]["3h"].as<float>();         DBG_PRINTLNV("Snow: " + String(WxForecast[r].Snowfall));
       if (r < 8) { // Check next 3 x 8 Hours = 1 day
         if (WxForecast[r].High > WxConditions[0].High) WxConditions[0].High = WxForecast[r].High; // Get Highest temperature for next 24Hrs
         if (WxForecast[r].Low  < WxConditions[0].Low)  WxConditions[0].Low  = WxForecast[r].Low;  // Get Lowest  temperature for next 24Hrs
@@ -535,8 +536,18 @@ bool obtainWeatherData(WiFiClient & client, const String & RequestType) {
   // awaited on version v2.5
   //api.openweathermap.org/data/2.5/RequestType?lat={lat}&lon={lon}&appid={API key}
   String uri = "/data/"+Version+"/"+RequestType+"?lat=" + Latitude + "&lon=" + Longitude + "&appid=" + apikey + "&mode=json&units=" + units + "&lang=" + Language;
+
+  // Log the request URI with the API key redacted (all but the last 4 chars) -
+  // it's persisted to /debug.log on flash now, not just streamed over serial.
+  String redactedKey = apikey;
+  if (apikey.length() > 4) {
+    redactedKey = "...";
+    redactedKey += apikey.substring(apikey.length() - 4);
+  }
+  String logUri = uri;
+  logUri.replace(apikey, redactedKey);
   DBG_PRINT("Connecting: ");
-  DBG_PRINT(server + uri);
+  DBG_PRINT(server + logUri);
   DBG_PRINTLN();
   if (RequestType == "onecall") uri += "&exclude=minutely,hourly,alerts,daily";
   http.begin(client, server, 80, uri); 
@@ -547,7 +558,7 @@ bool obtainWeatherData(WiFiClient & client, const String & RequestType) {
   }
   else
   {
-    DBG_PRINTF("connection failed, http error code %i %s\n", httpCode, http.errorToString(httpCode));
+    DBG_PRINTFE("connection failed, http error code %i %s\n", httpCode, http.errorToString(httpCode));
     client.stop();
     http.end();
     return false;
@@ -715,7 +726,6 @@ void DisplayForecastTextSection(int x, int y) {
 
 void DisplayVisiCCoverSection(int x, int y) {
   setFont(OpenSans12B);
-  DBG_PRINT("=========================="); DBG_PRINTLN(WxConditions[0].Visibility);
   DrawPressureAndTrend(x - 15, y + 9, WxConditions[0].Pressure, WxConditions[0].Trend);
   Visibility(x + 115, y, String(WxConditions[0].Visibility) + "M");
   CloudCover(x + 265, y, WxConditions[0].Cloudcover);
@@ -853,7 +863,7 @@ void DisplayGraphSection(int x, int y) {
 }
 
 void DisplayConditionsSection(int x, int y, String IconName, bool IconSize) {
-  DBG_PRINTLN("Icon name: " + IconName);
+  DBG_PRINTLNV("Icon name: " + IconName);
   if      (IconName == "01d" || IconName == "01n") ClearSky(x, y, IconSize, IconName);
   else if (IconName == "02d" || IconName == "02n") FewClouds(x, y, IconSize, IconName);
   else if (IconName == "03d" || IconName == "03n") ScatteredClouds(x, y, IconSize, IconName);
@@ -933,7 +943,7 @@ boolean UpdateLocalTime() {
   struct tm timeinfo;
   char   time_output[30], day_output[30], update_time[30];
   while (!getLocalTime(&timeinfo, 10000)) { // Wait up to 10-sec for time to synchronise
-    DBG_PRINTLN("Failed to obtain time");
+    DBG_PRINTLNE("Failed to obtain time");
     return false;
   }
   CurrentHour = timeinfo.tm_hour;

@@ -5,6 +5,12 @@
 Added littleFS support
 Migrated to stored config and added user_config.md document
 Error message write to device display if cannot load / parse user_config.json
+DBG_* macros now write to /debug.log on LittleFS instead of Serial, with a
+basic size cap (cleared and restarted once the log exceeds ~100KB)
+Added debug levels (ERROR/INFO/VERBOSE) via DBG_PRINT*E/V macros
+Added DebugLevel field in user_config.json, defaults to INFO
+Noisy per-field JSON dumps in DecodeWeather() moved to VERBOSE
+Real failure messages moved to ERROR level and are always logged
 
 ```
 
@@ -23,13 +29,15 @@ Main loop restructure
 
 TODO
 ```
-Write to logfile instead of serial monitor
-Modify DBG_PRINT macros to support debug levels
-Add limiter for debug log files, perhaps one per reset/wakeup and specifiy max number?
+Replace the flat size-cap truncation on /debug.log with proper rotation -
+perhaps one file per reset/wakeup and a max file count?
+Reduce flash wear from /debug.log - it's written every wake (every 30 min
+while awake), so consider write batching, a longer size cap, or an option
+to disable logging once the board is stable
 Add critical error message writes to device display
 Add ESPCONNECT how-to for user as well as dev bin file build
 Modify README.md to be descriptive of this fork
-Modify RTC code to compensate for drift between NTP syncs
+Modify RTC code to compensate for drift between NTP syncs (or just NTP sync every wake)
 Rain / Snow precipitation as different bar fill (port from viktormail.ha)
 Consider more descriptive icons (port from viktormail.ha?)
 Document sucessful mods to fix 2024 device's wake from sleep as reset event

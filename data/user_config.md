@@ -32,6 +32,7 @@ If the file is missing, unreadable, or missing `ssid` or `apikey`, the device sh
 | `ntpServer` | string | NTP server to sync time from. Pick one close to you, or use a regional pool, e.g. `0.europe.pool.ntp.org` (EU), `0.north-america.pool.ntp.org` (US). See https://www.ntppool.org/en/ |
 | `gmtOffset_sec` | number | Standard-time offset from GMT, in seconds. E.g. UK is `0`, US Eastern is `-18000`, most of Australia is `28800`. |
 | `daylightOffset_sec` | number | Additional DST offset, in seconds, on top of `gmtOffset_sec`. Most commonly `3600` (1 hour); some regions use `7200` (2h), `1800` (30m), or `19800` (5.5h). |
+| `DebugLevel` | string | Optional. Controls verbosity of `/debug.log` on LittleFS (only takes effect if `DEBUG_ENABLED` is on in `src/debug.h`): `"ERROR"` (failures only), `"INFO"` (default - status/flow plus errors), or `"VERBOSE"` (adds noisy detail like per-field JSON dumps). Missing or unrecognized values fall back to `"INFO"`. |
 
 ### Example timezone strings
 
