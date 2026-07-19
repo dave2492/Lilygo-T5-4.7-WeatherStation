@@ -46,6 +46,7 @@ enum alignment {LEFT, RIGHT, CENTER};
 // Note we always sync after an overnight wakeup or hard reset
 #define SYNC_EVERY_X_WAKES 18
 
+#ifndef T5_47_DEV
 // TEMPORARY WORKAROUND for a confirmed hardware brownout on this board: the EPD
 // refresh's current spike sags the rail enough to trip the brownout detector and
 // force a reset instead of a clean deep-sleep wake. A second contributing factor:
@@ -53,12 +54,15 @@ enum alignment {LEFT, RIGHT, CENTER};
 // break into oscillation and pull the rail down further. Remove once the hardware
 // fix (tie the floating op-amp inputs, extra bulk capacitance / better regulator)
 // is in place - see REVISIONS.md.
-#define DISABLE_BROWNOUT_DETECTOR 1
+#define DISABLE_BROWNOUT_DETECTOR 0
+#endif
 
+#ifndef T5_47_DEV
 // Underclock the CPU during EPD power-on/refresh to reduce peak current draw and
 // lessen the brownout risk directly, independent of the detector workaround above.
 #define REDUCE_CPU_FREQ_FOR_EPD 1
 #define EPD_CPU_FREQ_MHZ 80
+#endif
 
 // RTC Memory Variables (preserved during deep sleep)
 // Init to max value to trigger NTP after a hard reset
@@ -229,8 +233,8 @@ void BeginSleep() {
   UpdateLocalTime();
   UpdateTimers();
   esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
-  DBG_PRINTLN("This was wakeup number: " + String(bootCount) + "Reason: " + String(wakeupCause));
-  DBG_PRINTLN("Awake for: " + String((millis() - StartTime) / 1000.0, 3) + "-secs");
+  DBG_PRINTLN("This was wakeup number: " + String(bootCount) + " Cause: " + String(wakeupCause));
+  DBG_PRINTLN("Awake for: " + String((millis() - StartTime) / 1000.0, 3) + " secs");
   DBG_PRINTLN("Entering " + String(SleepTimer) + " (secs) of sleep time");
   DBG_END(); // stop input, wait for output buffers, then stop the service
   delay(3000);
@@ -283,19 +287,13 @@ void InitialiseSystem() {
   StartTime = millis();
   wakeupCause = esp_sleep_get_wakeup_cause();
   resetReason = esp_reset_reason();
-  DBG_INIT(115200);
+  DBG_INIT(115200);  // Now OK to print errors, but try to defer others till config is read
   delay(1000);
-  // comment this out since the S3 kills the USB when sleeping
-  //while (!Serial);
-  DBG_PRINTLN("\n" + String(__FILE__) + "\nStarting...");
-  // Incr and display bootCount
   bootCount++;
-  DBG_PRINTF("Wakeup Number: %d\n", bootCount);
-  DBG_PRINTF("Wakeup Cause: %d\n", wakeupCause);
-  DBG_PRINTF("Reset Reason: %d\n", resetReason);
   epd_init();
   framebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), EPD_WIDTH * EPD_HEIGHT / 2);
   if (!framebuffer) DBG_PRINTLNE("Memory alloc failed!");
+  else
   memset(framebuffer, 0xFF, EPD_WIDTH * EPD_HEIGHT / 2);
 }
 
@@ -392,6 +390,11 @@ void setup() {
     setCpuFrequencyMhz(cpuFreqMhz);
 #endif
   } else {
+    // Good so far, OK to print to log...
+    DBG_PRINTLN("\n" + String(__FILE__) + "\nStarting...");
+    DBG_PRINTF("Wakeup Number: %d\n", bootCount);
+    DBG_PRINTF("Wakeup Cause: %d\n", wakeupCause);
+    DBG_PRINTF("Reset Reason: %d\n", resetReason);
     // Connect to Internet
     if (StartWiFi() == false) {
       // Failed - Not much to do then...
@@ -437,7 +440,7 @@ void setup() {
   #endif
       } else {
         // Data incomplete - print error msg
-        DBG_PRINTLN("FAILED to Receive all weather data, skipping display...");
+        DBG_PRINTLNE("FAILED to Receive all weather data, skipping display...");
       }
     }  // End of wifi connected
   }  // End of config loaded
@@ -980,34 +983,17 @@ void DrawBattery(int x, int y) {
   int voltage = analogReadMilliVolts(bat_adc_pin) + analogReadMilliVolts(bat_adc_pin);
   uint8_t newSOC;
 
-// use map calls to choose between three linear approximations to calculate SOC
-// first and last 10% are the most non-linear sections
-// middle 80% section (between knee1 and knee2) is typically linear
-// Modify the following defines for other chemistries, like lipo
-// which, for example, has a low cutoff voltage of 3.0v typical
-// Values are in millivolts
+  // map calls are used to choose between three linear approximations to calculate SOC
+  // the first and last 10% are the most non-linear sections
+  // the middle 80% section (between knee1 and knee2) is typically quite linear
+  // the values are based on a typical 3.7V nominal cell and is expressed in millivolts.
+  // the minimum voltage setting has been increased slightly in order to avoid the device going into a brownout condition.
 
-// May need to define a minimum voltage for device operation experimentally
-// Check both the original Dev board and the newer S3 based board
-// This may require action at voltage above what is defined below
-// I woud like to add an 'alarm' for minimum device voltage to clear screen, 
-// display message and sleep until charging begun and user clicks reset.
-
-#if CHEM_LION
-  // values for Li-Ion chemistry, from NCR18650B datasheet, Dev board came with Li-Ion holder
-  #define BattTop 4150
-  #define BattKnee1 4000
-  #define BattKnee2 3300
-  #define BattFlat 3000
-#else
-  // values for Li-Po chemistry, from various sources, S3 boards are usually setup with Li-Po
-  #define BattTop 4150
+  #define BattTop 4200
   #define BattKnee1 4000
   #define BattKnee2 3400
   #define BattFlat 3200
-#endif
 
-  // Use map calls to obtain SOC
   if (voltage >= BattTop) newSOC = 100;
   else if (voltage >= BattKnee1) // 90-100% range
     newSOC = map(voltage, BattKnee1, BattTop, 90, 100);

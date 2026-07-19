@@ -29,6 +29,7 @@ Main loop restructure
 
 TODO
 ```
+Consider removing the NTP skips unless the S3 wakeup problems can be fixed
 Replace the flat size-cap truncation on /debug.log with proper rotation -
 perhaps one file per reset/wakeup and a max file count?
 Reduce flash wear from /debug.log - it's written every wake (every 30 min
@@ -40,5 +41,6 @@ Modify README.md to be descriptive of this fork
 Modify RTC code to compensate for drift between NTP syncs (or just NTP sync every wake)
 Rain / Snow precipitation as different bar fill (port from viktormail.ha)
 Consider more descriptive icons (port from viktormail.ha?)
+Consider moving to onecall for openweathermap (single round trip)
 Document sucessful mods to fix 2024 device's wake from sleep as reset event
 ```
