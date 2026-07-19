@@ -68,7 +68,6 @@ enum alignment {LEFT, RIGHT, CENTER};
 // Init to max value to trigger NTP after a hard reset
 // Braces mean only init from hard reset
 RTC_DATA_ATTR int bootCount = { SYNC_EVERY_X_WAKES };
-int wakeupCause;
 int resetReason;  // esp_reset_reason(): distinguishes an actual reset (e.g. brownout) from a clean deep-sleep wake
 
 // Normal Global Variables
@@ -233,7 +232,7 @@ void BeginSleep() {
   UpdateLocalTime();
   UpdateTimers();
   esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
-  DBG_PRINTLN("This was wakeup number: " + String(bootCount) + " Cause: " + String(wakeupCause));
+  DBG_PRINTLN("This was wakeup number: " + String(bootCount) + " Reason: " + String(resetReason));
   DBG_PRINTLN("Awake for: " + String((millis() - StartTime) / 1000.0, 3) + " secs");
   DBG_PRINTLN("Entering " + String(SleepTimer) + " (secs) of sleep time");
   DBG_END(); // stop input, wait for output buffers, then stop the service
@@ -285,7 +284,6 @@ void StopWiFi() {
 
 void InitialiseSystem() {
   StartTime = millis();
-  wakeupCause = esp_sleep_get_wakeup_cause();
   resetReason = esp_reset_reason();
   DBG_INIT(115200);  // Now OK to print errors, but try to defer others till config is read
   delay(1000);
@@ -393,7 +391,6 @@ void setup() {
     // Good so far, OK to print to log...
     DBG_PRINTLN("\n" + String(__FILE__) + "\nStarting...");
     DBG_PRINTF("Wakeup Number: %d\n", bootCount);
-    DBG_PRINTF("Wakeup Cause: %d\n", wakeupCause);
     DBG_PRINTF("Reset Reason: %d\n", resetReason);
     // Connect to Internet
     if (StartWiFi() == false) {
@@ -622,7 +619,7 @@ void DisplayGeneralInfoSection() {
   setFont(OpenSans10B);
   drawString(15, 2, City, LEFT);
 //  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str, CENTER);
-  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + "  ct  " + String(bootCount) + " rr " + String(wakeupCause) + " esp " + String(resetReason), CENTER);
+  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + "  ct  " + String(bootCount) + " rr " + String(resetReason), CENTER);
 }
 
 void DisplayWeatherIcon(int x, int y) {
