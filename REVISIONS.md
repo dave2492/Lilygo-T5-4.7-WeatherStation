@@ -11,7 +11,9 @@ Added debug levels (ERROR/INFO/VERBOSE) via DBG_PRINT*E/V macros
 Added DebugLevel field in user_config.json, defaults to INFO
 Noisy per-field JSON dumps in DecodeWeather() moved to VERBOSE
 Real failure messages moved to ERROR level and are always logged
-
+(TEMP) Add an Error level message if NTP is done from a RESET, with the new time included.
+So I can know how often a 'RESET' occurs on wake from deep sleep.
+Of course, it will log any manual resets, so note them on paper during the test.
 ```
 
 1.0 Initial Baseline Version - Jul 1, 2026
@@ -29,9 +31,9 @@ Main loop restructure
 
 TODO
 ```
+Log error messages should include date string if available (esp if logging errors only)
 Consider removing the NTP skips unless the S3 wakeup problems can be fixed
-Replace the flat size-cap truncation on /debug.log with proper rotation -
-perhaps one file per reset/wakeup and a max file count?
+Replace the flat size-cap truncation on /debug.log with proper rotation
 Reduce flash wear from /debug.log - it's written every wake (every 30 min
 while awake), so consider write batching, a longer size cap, or an option
 to disable logging once the board is stable
@@ -40,7 +42,7 @@ Add ESPCONNECT how-to for user as well as dev bin file build
 Modify README.md to be descriptive of this fork
 Modify RTC code to compensate for drift between NTP syncs (or just NTP sync every wake)
 Rain / Snow precipitation as different bar fill (port from viktormail.ha)
-Consider more descriptive icons (port from viktormail.ha?)
+Consider more descriptive icons (port from viktormail.ha)
 Consider moving to onecall for openweathermap (single round trip)
-Document sucessful mods to fix 2024 device's wake from sleep as reset event
+Document mods to fix 2024 device's wake from sleep as reset event (if successful)
 ```

@@ -47,6 +47,13 @@ enum alignment {LEFT, RIGHT, CENTER};
 #define SYNC_EVERY_X_WAKES 18
 
 #ifndef T5_47_DEV
+// TEMPORARY: log the reset reason to the debug log as an error if it was not a clean deep-sleep wake.
+// This is to help diagnose a confirmed hardware brownout issue on this board, which is being worked on. 
+// Remove once the hardware fix is in place - see REVISIONS.md.
+#define LOG_RESET_REASON_AS_ERROR 1
+#endif
+
+#ifndef T5_47_DEV
 // TEMPORARY WORKAROUND for a confirmed hardware brownout on this board: the EPD
 // refresh's current spike sags the rail enough to trip the brownout detector and
 // force a reset instead of a clean deep-sleep wake. A second contributing factor:
@@ -65,9 +72,9 @@ enum alignment {LEFT, RIGHT, CENTER};
 #endif
 
 // RTC Memory Variables (preserved during deep sleep)
-// Init to max value to trigger NTP after a hard reset
+// Init to max value to trigger NTP after a hard reset (plus 2 to indicate is the reset case)
 // Braces mean only init from hard reset
-RTC_DATA_ATTR int bootCount = { SYNC_EVERY_X_WAKES };
+RTC_DATA_ATTR int bootCount = { SYNC_EVERY_X_WAKES + 2 };
 int resetReason;  // esp_reset_reason(): distinguishes an actual reset (e.g. brownout) from a clean deep-sleep wake
 
 // Normal Global Variables
@@ -232,7 +239,6 @@ void BeginSleep() {
   UpdateLocalTime();
   UpdateTimers();
   esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
-  DBG_PRINTLN("This was wakeup number: " + String(bootCount) + " Reason: " + String(resetReason));
   DBG_PRINTLN("Awake for: " + String((millis() - StartTime) / 1000.0, 3) + " secs");
   DBG_PRINTLN("Entering " + String(SleepTimer) + " (secs) of sleep time");
   DBG_END(); // stop input, wait for output buffers, then stop the service
@@ -344,8 +350,8 @@ bool LoadUserConfig() {
 void CheckTimeSync() {
   // Check if it's time to sync NTP
   if (bootCount >= SYNC_EVERY_X_WAKES) {
+    DBG_PRINTF("Boot count %d >= %d, syncing NTP\n", bootCount, SYNC_EVERY_X_WAKES);
     bootCount = 0;
-    DBG_PRINTLN("Threshold reached. Syncing NTP...");
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer.c_str(), "time.nist.gov"); //(gmtOffset_sec, daylightOffset_sec, ntpServer)
   } else {
     DBG_PRINTLN("Skipping NTP sync to save power.");
@@ -390,8 +396,7 @@ void setup() {
   } else {
     // Good so far, OK to print to log...
     DBG_PRINTLN("\n" + String(__FILE__) + "\nStarting...");
-    DBG_PRINTF("Wakeup Number: %d\n", bootCount);
-    DBG_PRINTF("Reset Reason: %d\n", resetReason);
+    DBG_PRINTF("Wakeup Number: %d, Reset Reason: %d\n", bootCount, resetReason);
     // Connect to Internet
     if (StartWiFi() == false) {
       // Failed - Not much to do then...
@@ -410,6 +415,12 @@ void setup() {
     } else {
       // Connected! Continue...
       CheckTimeSync();    // Run an NTP sync if necessary
+      #if LOG_RESET_REASON_AS_ERROR
+      // TEMP log as error if reset reason was not a clean deep-sleep wake (e.g. brownout or manual reset)
+      if (resetReason != 8) {
+        DBG_PRINTLNE("Reset reason is " + String(resetReason) + " at " + Time_str + " on " + Date_str);
+      }
+      #endif
       // Get weather data
       byte Attempts = 1;
       bool RxWeather  = false;
