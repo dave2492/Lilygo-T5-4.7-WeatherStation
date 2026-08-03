@@ -324,6 +324,11 @@ void BeginSleep() {
   epd_poweroff_all();
   updateLocalCorrectedTime();
   UpdateTimers();
+  // Fold this session's awake time plus the upcoming sleep duration into the
+  // persistent accumulator now, since esp_timer_get_time() resets to 0 on wake
+  // and can't be diffed across a sleep cycle.
+  rtcAccumulatedMicros += (int64_t)esp_timer_get_time();
+  rtcAccumulatedMicros += (int64_t)SleepTimer * 1000000LL;
   esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
   DBG_PRINTLN("Local time: " + Date_str + " @ " + Time_str);
   DBG_PRINTLN("Awake for: " + String((millis() - StartTime) / 1000.0, 3) + " secs");
