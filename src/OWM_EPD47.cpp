@@ -225,13 +225,12 @@ time_t getDriftCorrectedTime() {
 
 // get the corrected local time and set the time strings appropriately.
 // return false if time cannot be obtained.
-boolean updateLocalCorrectedTime() {
+void updateLocalCorrectedTime() {
   struct tm timeinfo;
   char   time_output[30], day_output[30], update_time[30];
   time_t correctedTime = getDriftCorrectedTime();
   if (localtime_r(&correctedTime, &timeinfo) == NULL) {
     DBG_PRINTLN("Failed to convert corrected time to local time");
-    return false;
   }
   // Update the global time variables.
   CurrentHour = timeinfo.tm_hour;
@@ -251,7 +250,6 @@ boolean updateLocalCorrectedTime() {
   }
   Date_str = day_output;
   Time_str = time_output;
-  return true;
 }
 
 // Check if it's time to sync NTP, if so, then do it.
@@ -284,7 +282,7 @@ void CheckTimeSync() {
       rtcAccumulatedMicros = -(int64_t)esp_timer_get_time();
     }
   }
-  updateLocalCorrectedTime(); // update the global time variables and strings with the new NTP time
+  updateLocalCorrectedTime(); // update the global time variables and strings
 }
 
 // Trigger a sync on the next wake or reset
@@ -382,11 +380,6 @@ void InitialiseSystem() {
   resetReason = esp_reset_reason();
   DBG_INIT(115200);  // Now OK to print errors, but try to defer others till config is read
   delay(500);
-  // The TZ state that localtime() reads lives in normal RAM and resets on every
-  // deep-sleep reboot, so it must be reapplied every wake -- not just on syncs.
-  // This is local-only (no network), so it's cheap to redo unconditionally here.
-  setenv("TZ", tzString.c_str(), 1);
-  tzset();
   rtcWakeCount++;
   epd_init();
   framebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), EPD_WIDTH * EPD_HEIGHT / 2);
@@ -474,6 +467,12 @@ void setup() {
         DBG_PRINTLNE( Date_str + ":" + Time_str + "Reset reason is " + String(resetReason) );
       }
     #endif
+
+    // The TZ state that localtime() reads lives in normal RAM and resets on every
+    // deep-sleep reboot, so it must be reapplied every wake -- not just on syncs.
+    // Had to wait until the user config was loaded.
+    setenv("TZ", tzString.c_str(), 1);
+    tzset();
 
     // Connect to Internet
     if (StartWiFi() == false) {
@@ -704,7 +703,7 @@ void DisplayGeneralInfoSection() {
   drawString(15, 2, City, LEFT);
 //  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str, CENTER);
 //  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + "  ct  " + String(rtcWakeCount) + " rr " + String(resetReason), CENTER);
-  sprintf(Cal_str, "  Cal: %.4f", rtcDriftMultiplier);
+  sprintf(Cal_str, "  CM: %.4f", rtcDriftMultiplier);
   drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + Cal_str, CENTER);
 }
 
