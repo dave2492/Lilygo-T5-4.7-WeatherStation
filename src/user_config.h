@@ -17,7 +17,7 @@ String Longitude;
 String Language;
 String Hemisphere;
 String Units;
-String Timezone;
+String tzString;
 String ntpServer;
 int    gmtOffset_sec;
 int    daylightOffset_sec;

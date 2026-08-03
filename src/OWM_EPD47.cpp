@@ -50,7 +50,7 @@ enum alignment {LEFT, RIGHT, CENTER};
 // TEMPORARY: log the reset reason to the debug log as an error if it was not a clean deep-sleep wake.
 // This is to help diagnose a confirmed hardware brownout issue on this board, which is being worked on. 
 // Remove once the hardware fix is in place - see REVISIONS.md.
-#define LOG_RESET_REASON_AS_ERROR 1
+#define LOG_RESET_REASON_AS_ERROR 0
 #endif
 
 #ifndef T5_47_DEV
@@ -71,10 +71,20 @@ enum alignment {LEFT, RIGHT, CENTER};
 #define EPD_CPU_FREQ_MHZ 80
 #endif
 
-// RTC Memory Variables (preserved during deep sleep)
-// Init to max value to trigger NTP after a hard reset (plus 2 to indicate is the reset case)
+// --- RTC Persistent Memory Variables ---
+// These variables survive deep sleep cycles
 // Braces mean only init from hard reset
-RTC_DATA_ATTR int bootCount = { SYNC_EVERY_X_WAKES + 2 };
+RTC_DATA_ATTR time_t   rtcLastNtpUnixTime = 0;      // True network time marker
+// esp_timer_get_time() resets to 0 every time the chip wakes from deep sleep, so it
+// cannot be diffed across a sleep cycle. Instead this accumulates elapsed real time
+// (awake time + requested sleep durations) since rtcLastNtpUnixTime was set, and is
+// rebased to -esp_timer_get_time() at each sync so it stays exact regardless of when
+// in a wake session the sync completes.
+RTC_DATA_ATTR int64_t  rtcAccumulatedMicros = 0;
+RTC_DATA_ATTR double   rtcDriftMultiplier = 1.0;    // Dynamically calculated multiplier
+RTC_DATA_ATTR int      rtcWakeCount = { SYNC_EVERY_X_WAKES + 2 };    // Counts sequential wakeups
+// Init to max value to trigger NTP sync (plus 2 to indicate a hardware reset and not software triggered)
+
 int resetReason;  // esp_reset_reason(): distinguishes an actual reset (e.g. brownout) from a clean deep-sleep wake
 
 // Normal Global Variables
@@ -203,12 +213,89 @@ void epd_update();
 
 // routines
 
+// Mathematical drift interpolation, return epoch time corrected for drift.
+time_t getDriftCorrectedTime() {
+  if (rtcLastNtpUnixTime == 0) {
+    return time(NULL);
+  }
+  double internalElapsedSeconds = (rtcAccumulatedMicros + (int64_t)esp_timer_get_time()) / 1000000.0;
+  double correctedElapsedSeconds = internalElapsedSeconds * rtcDriftMultiplier;
+  return rtcLastNtpUnixTime + (time_t)correctedElapsedSeconds;
+}
+
+// get the corrected local time and set the time strings appropriately.
+// return false if time cannot be obtained.
+boolean updateLocalCorrectedTime() {
+  struct tm timeinfo;
+  char   time_output[30], day_output[30], update_time[30];
+  time_t correctedTime = getDriftCorrectedTime();
+  if (localtime_r(&correctedTime, &timeinfo) == NULL) {
+    DBG_PRINTLN("Failed to convert corrected time to local time");
+    return false;
+  }
+  // Update the global time variables.
+  CurrentHour = timeinfo.tm_hour;
+  CurrentMin  = timeinfo.tm_min;
+  CurrentSec  = timeinfo.tm_sec;
+
+  if (Units == "M") {
+    sprintf(day_output, "%s, %02u %s %04u", weekday_D[timeinfo.tm_wday], timeinfo.tm_mday, month_M[timeinfo.tm_mon], (timeinfo.tm_year) + 1900);
+    strftime(update_time, sizeof(update_time), "%H:%M:%S", &timeinfo);  // Creates: '@ 14:05:49'   and change from 30 to 8 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    sprintf(time_output, "%s", update_time);
+  }
+  else
+  {
+    strftime(day_output, sizeof(day_output), "%a %b-%d-%Y", &timeinfo); // Creates  'Sat May-31-2019'
+    strftime(update_time, sizeof(update_time), "%r", &timeinfo);        // Creates: '@ 02:05:49pm'
+    sprintf(time_output, "%s", update_time);
+  }
+  Date_str = day_output;
+  Time_str = time_output;
+  return true;
+}
+
+// Check if it's time to sync NTP, if so, then do it.
+void CheckTimeSync() {
+  if (rtcWakeCount < SYNC_EVERY_X_WAKES) {
+    DBG_PRINTF("Wake count %d < %d, skipping NTP sync\n", rtcWakeCount, SYNC_EVERY_X_WAKES);
+  } else {
+    DBG_PRINTF("Wake count %d >= %d, syncing NTP\n", rtcWakeCount, SYNC_EVERY_X_WAKES);
+    configTzTime(tzString.c_str(), ntpServer.c_str(), "time.nist.gov");
+    delay(100);
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo, 10000)) { // Wait up to 10-sec for time to synchronise
+      DBG_PRINTLN("Failed to obtain time");
+      return;  // we'll try again next wakeup
+    } else {
+      rtcWakeCount = 0;  // we succeeded.
+      // update the drift variables as needed.
+      time_t currentNtpUnixTime = time(NULL);
+      // Calc a new baseline if this is a sequential update
+      if (rtcLastNtpUnixTime != 0) {
+        double realElapsedSeconds = difftime(currentNtpUnixTime, rtcLastNtpUnixTime);
+        double internalElapsedSeconds = (rtcAccumulatedMicros + (int64_t)esp_timer_get_time()) / 1000000.0;
+        if (internalElapsedSeconds > 0 && realElapsedSeconds > 0) {
+          rtcDriftMultiplier = realElapsedSeconds / internalElapsedSeconds;
+          DBG_PRINTF("[Calibration Updated] Multiplier set to: %.9f\n", rtcDriftMultiplier);
+        }
+      }
+      // Commit reference anchors back to RTC RAM
+      rtcLastNtpUnixTime = currentNtpUnixTime;
+      rtcAccumulatedMicros = -(int64_t)esp_timer_get_time();
+    }
+  }
+  updateLocalCorrectedTime(); // update the global time variables and strings with the new NTP time
+}
+
+// Trigger a sync on the next wake or reset
+void TriggerTimeSync() {
+  rtcWakeCount = SYNC_EVERY_X_WAKES;
+}
+
+// Set the timer values for deep sleep.  Does a SleepDuration sleep when awake.  Does a single sleep for overnight
 void UpdateTimers() {
   bool AwakeNow;
   int HourDuration;
-  // Set the timer values for deep sleep
-  // Does a SleepDuration sleep when awake
-  // Does a single sleep for overnight
   // Am I in a waking hour right now?
   if (WakeupHour > SleepHour)
     AwakeNow = (CurrentHour >= WakeupHour || CurrentHour <= SleepHour);
@@ -233,12 +320,14 @@ void UpdateTimers() {
   }
 }
 
+// Prepare for deep sleep.
 void BeginSleep() {
-  StopWiFi();         // ensure it is indeed OFF
+  StopWiFi();
   epd_poweroff_all();
-  UpdateLocalTime();
+  updateLocalCorrectedTime();
   UpdateTimers();
   esp_sleep_enable_timer_wakeup(SleepTimer * 1000000LL); // in Secs, 1000000LL converts to Secs as unit = 1uSec
+  DBG_PRINTLN("Local time: " + Date_str + " @ " + Time_str);
   DBG_PRINTLN("Awake for: " + String((millis() - StartTime) / 1000.0, 3) + " secs");
   DBG_PRINTLN("Entering " + String(SleepTimer) + " (secs) of sleep time");
   DBG_END(); // stop input, wait for output buffers, then stop the service
@@ -292,8 +381,13 @@ void InitialiseSystem() {
   StartTime = millis();
   resetReason = esp_reset_reason();
   DBG_INIT(115200);  // Now OK to print errors, but try to defer others till config is read
-  delay(1000);
-  bootCount++;
+  delay(500);
+  // The TZ state that localtime() reads lives in normal RAM and resets on every
+  // deep-sleep reboot, so it must be reapplied every wake -- not just on syncs.
+  // This is local-only (no network), so it's cheap to redo unconditionally here.
+  setenv("TZ", tzString.c_str(), 1);
+  tzset();
+  rtcWakeCount++;
   epd_init();
   framebuffer = (uint8_t *)ps_calloc(sizeof(uint8_t), EPD_WIDTH * EPD_HEIGHT / 2);
   if (!framebuffer) DBG_PRINTLNE("Memory alloc failed!");
@@ -334,7 +428,7 @@ bool LoadUserConfig() {
   Language           = doc["Language"].as<String>();
   Hemisphere         = doc["Hemisphere"].as<String>();
   Units              = doc["Units"].as<String>();
-  Timezone           = doc["Timezone"].as<String>();
+  tzString           = doc["Timezone"].as<String>();
   ntpServer          = doc["ntpServer"].as<String>();
   gmtOffset_sec      = doc["gmtOffset_sec"].as<int>();
   daylightOffset_sec = doc["daylightOffset_sec"].as<int>();
@@ -345,27 +439,6 @@ bool LoadUserConfig() {
     return false;
   }
   return true;
-}
-
-void CheckTimeSync() {
-  // Check if it's time to sync NTP
-  if (bootCount >= SYNC_EVERY_X_WAKES) {
-    DBG_PRINTF("Boot count %d >= %d, syncing NTP\n", bootCount, SYNC_EVERY_X_WAKES);
-    bootCount = 0;
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer.c_str(), "time.nist.gov"); //(gmtOffset_sec, daylightOffset_sec, ntpServer)
-  } else {
-    DBG_PRINTLN("Skipping NTP sync to save power.");
-  }
-  // set the timezone and complete the time setup
-  setenv("TZ", Timezone.c_str(), 1);  //setenv()adds the "TZ" variable to the environment with a value TimeZone, only used if set to 1, 0 means no change
-  tzset(); // Set the TZ environment variable
-  delay(100);
-  UpdateLocalTime();
-}
-
-void TriggerTimeSync() {
-  // Trigger a sync on the next wake or reset
-  bootCount = SYNC_EVERY_X_WAKES;
 }
 
 // The mandatory functions loop, setup, ...
@@ -379,8 +452,7 @@ void setup() {
 #endif
   InitialiseSystem();
   if (!LoadUserConfig()) {
-    // Can't do anything meaningful without config - show a visible error (there may
-    // be no serial monitor attached) and retry next wake.
+    // Can't do anything meaningful without config - show a visible error and retry next wake.
 #if REDUCE_CPU_FREQ_FOR_EPD
     uint32_t cpuFreqMhz = getCpuFrequencyMhz();
     setCpuFrequencyMhz(EPD_CPU_FREQ_MHZ); // Lower peak current draw during EPD refresh
@@ -395,8 +467,14 @@ void setup() {
 #endif
   } else {
     // Good so far, OK to print to log...
-    DBG_PRINTLN("\n" + String(__FILE__) + "\nStarting...");
-    DBG_PRINTF("Wakeup Number: %d, Reset Reason: %d\n", bootCount, resetReason);
+    DBG_PRINTF("\n--- Wakeup Session #%d, Reason %d ---\n", rtcWakeCount, resetReason);
+    #if LOG_RESET_REASON_AS_ERROR
+      // TEMP log as error if reset reason was not a clean deep-sleep wake (e.g. brownout or manual reset)
+      if (resetReason != 8) {
+        DBG_PRINTLNE( Date_str + ":" + Time_str + "Reset reason is " + String(resetReason) );
+      }
+    #endif
+
     // Connect to Internet
     if (StartWiFi() == false) {
       // Failed - Not much to do then...
@@ -415,12 +493,6 @@ void setup() {
     } else {
       // Connected! Continue...
       CheckTimeSync();    // Run an NTP sync if necessary
-      #if LOG_RESET_REASON_AS_ERROR
-      // TEMP log as error if reset reason was not a clean deep-sleep wake (e.g. brownout or manual reset)
-      if (resetReason != 8) {
-        DBG_PRINTLNE("Reset reason is " + String(resetReason) + " at " + Time_str + " on " + Date_str);
-      }
-      #endif
       // Get weather data
       byte Attempts = 1;
       bool RxWeather  = false;
@@ -448,7 +520,7 @@ void setup() {
   #endif
       } else {
         // Data incomplete - print error msg
-        DBG_PRINTLNE("FAILED to Receive all weather data, skipping display...");
+        DBG_PRINTLN("FAILED to Receive all weather data, skipping display...");
       }
     }  // End of wifi connected
   }  // End of config loaded
@@ -467,8 +539,8 @@ bool DecodeWeather(WiFiClient& json, String Type) {
   JsonDocument doc;                                              // allocate the JsonDocument
   DeserializationError error = deserializeJson(doc, json); // Deserialize the JSON document
   if (error) {                                             // Test if parsing succeeds.
-    DBG_PRINTE(F("deserializeJson() failed: "));
-    DBG_PRINTLNE(error.c_str());
+    DBG_PRINT(F("deserializeJson() failed: "));
+    DBG_PRINTLN(error.c_str());
     return false;
   }
   // convert it to a JsonObject
@@ -627,10 +699,13 @@ void DisplayWeather() {                          // 4.7" e-paper display is 960x
 }
 
 void DisplayGeneralInfoSection() {
+  char Cal_str[20];
   setFont(OpenSans10B);
   drawString(15, 2, City, LEFT);
 //  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str, CENTER);
-  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + "  ct  " + String(bootCount) + " rr " + String(resetReason), CENTER);
+//  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + "  ct  " + String(rtcWakeCount) + " rr " + String(resetReason), CENTER);
+  sprintf(Cal_str, "  Cal: %.4f", rtcDriftMultiplier);
+  drawString(EPD_WIDTH/2, 2, Date_str + "  @  " + Time_str + Cal_str, CENTER);
 }
 
 void DisplayWeatherIcon(int x, int y) {
@@ -948,34 +1023,6 @@ void DrawRSSI(int x, int y, int rssi) {
   }
   if (rssi == 0) 
     drawString(x + 28, y - 18, "x", LEFT);
-}
-
-boolean UpdateLocalTime() {
-  struct tm timeinfo;
-  char   time_output[30], day_output[30], update_time[30];
-  while (!getLocalTime(&timeinfo, 10000)) { // Wait up to 10-sec for time to synchronise
-    DBG_PRINTLNE("Failed to obtain time");
-    return false;
-  }
-  CurrentHour = timeinfo.tm_hour;
-  CurrentMin  = timeinfo.tm_min;
-  CurrentSec  = timeinfo.tm_sec;
-  //See http://www.cplusplus.com/reference/ctime/strftime/
-  DBG_PRINTLN(&timeinfo, "%a %b %d %Y   %H:%M:%S");      // Displays: Saturday, June 24 2017 14:05:49
-  if (Units == "M") {
-    sprintf(day_output, "%s, %02u %s %04u", weekday_D[timeinfo.tm_wday], timeinfo.tm_mday, month_M[timeinfo.tm_mon], (timeinfo.tm_year) + 1900);
-    strftime(update_time, sizeof(update_time), "%H:%M:%S", &timeinfo);  // Creates: '@ 14:05:49'   and change from 30 to 8 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    sprintf(time_output, "%s", update_time);
-  }
-  else
-  {
-    strftime(day_output, sizeof(day_output), "%a %b-%d-%Y", &timeinfo); // Creates  'Sat May-31-2019'
-    strftime(update_time, sizeof(update_time), "%r", &timeinfo);        // Creates: '@ 02:05:49pm'
-    sprintf(time_output, "%s", update_time);
-  }
-  Date_str = day_output;
-  Time_str = time_output;
-  return true;
 }
 
 void DrawBattery(int x, int y) {
